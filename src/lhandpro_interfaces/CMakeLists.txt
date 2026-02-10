@@ -10,12 +10,12 @@ find_package(ament_cmake REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
-  "srv/SetEnable.srv"
-  "srv/GetNowAlarm.srv"
+  "srv/ControlMotors.srv"
   "srv/GetAngle.srv"
   "srv/GetAngularVelocity.srv"
   "srv/GetControlMode.srv"
   "srv/GetMaxCurrent.srv"
+  "srv/GetNowAlarm.srv"
   "srv/GetNowAngle.srv"
   "srv/GetNowAngularVelocity.srv"
   "srv/GetNowCurrent.srv"
@@ -28,6 +28,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/SetAngle.srv"
   "srv/SetAngularVelocity.srv"
   "srv/SetControlMode.srv"
+  "srv/SetEnable.srv"
   "srv/SetMaxCurrent.srv"
   "srv/SetPosition.srv"
   "srv/SetPositionVelocity.srv"

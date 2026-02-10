@@ -12,9 +12,10 @@
 #include <utility>
 #include <vector>
 
+#include "lhandpro_interfaces/srv/control_motors.hpp"
 #include "lhandpro_interfaces/srv/get_control_mode.hpp"
-#include "lhandpro_interfaces/srv/get_now_alarm.hpp"
 #include "lhandpro_interfaces/srv/get_max_current.hpp"
+#include "lhandpro_interfaces/srv/get_now_alarm.hpp"
 #include "lhandpro_interfaces/srv/get_now_angle.hpp"
 #include "lhandpro_interfaces/srv/get_now_current.hpp"
 #include "lhandpro_interfaces/srv/get_now_position.hpp"
@@ -46,6 +47,7 @@
 #define SRV_NAME_SET_CONTROL_MODE "set_control_mode"
 #define SRV_NAME_HOME_MOTORS "home_motors"
 #define SRV_NAME_MOVE_MOTORS "move_motors"
+#define SRV_NAME_CONTROL_MOTORS "control_motors"
 
 // 通讯方式选择宏
 // 0: 使用EtherCAT通讯
@@ -56,8 +58,6 @@
 // lhplib::LAC_DOF_6: DH116灵巧手
 // lhplib::LAC_DOF_6_S: DH116S灵巧手
 #define HAND_TYPE lhplib::LAC_DOF_6
-
-
 
 // 服务注册宏
 #define REGISTER_SERVICE(SrvType, SrvName, Callback)          \
@@ -168,6 +168,11 @@ class HandControlService : public rclcpp::Node {
       const std::shared_ptr<lhandpro_interfaces::srv::MoveMotors::Request> req,
       std::shared_ptr<lhandpro_interfaces::srv::MoveMotors::Response> res);
 
+  void control_motors_callback(
+      const std::shared_ptr<lhandpro_interfaces::srv::ControlMotors::Request>
+          req,
+      std::shared_ptr<lhandpro_interfaces::srv::ControlMotors::Response> res);
+
  private:
   std::shared_ptr<lhplib::LHandProLib> lhp_lib_;
   std::shared_ptr<EthercatMaster> ec_master_;
@@ -212,4 +217,6 @@ class HandControlService : public rclcpp::Node {
       home_motors_srv_;
   rclcpp::Service<lhandpro_interfaces::srv::MoveMotors>::SharedPtr
       move_motors_srv_;
+  rclcpp::Service<lhandpro_interfaces::srv::ControlMotors>::SharedPtr
+      control_motors_srv_;
 };

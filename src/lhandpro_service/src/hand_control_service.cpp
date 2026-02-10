@@ -3,8 +3,8 @@
 #include <functional>
 #include <vector>
 
-#include "EthercatMaster.h"
 #include "CANFDMaster.h"
+#include "EthercatMaster.h"
 
 HandControlService::HandControlService() : Node("lhandpro_service") {
   RCLCPP_INFO(this->get_logger(), "LHandPro控制服务已创建");
@@ -105,7 +105,8 @@ void HandControlService::init_canfd(int channel) {
   }
 
   for (size_t i = 0; i < names.size(); ++i) {
-    RCLCPP_INFO(this->get_logger(), "扫描到:%d --- %s", static_cast<int>(i), names[i].c_str());
+    RCLCPP_INFO(this->get_logger(), "扫描到:%d --- %s", static_cast<int>(i),
+                names[i].c_str());
   }
 
   if (target < 0 || target >= static_cast<int>(names.size())) {
@@ -113,7 +114,8 @@ void HandControlService::init_canfd(int channel) {
     return;
   }
 
-  RCLCPP_INFO(this->get_logger(), "正在连接:%d --- %s", target, names[target].c_str());
+  RCLCPP_INFO(this->get_logger(), "正在连接:%d --- %s", target,
+              names[target].c_str());
 
   // 连接, 仲裁段波特率 1000kbps, 数据段波特率 5000kbps
   if (!canfd_master_->connect(target, 1000, 5000)) {
@@ -134,10 +136,11 @@ void HandControlService::init_canfd(int channel) {
   lhp_lib_->set_send_canfd_callback_ex(&send_function_);
 
   // 设置接收回调函数, 刷新解析数据
-  canfd_master_->setReceiveCallback(
-      [this](uint32_t /*id*/, const std::vector<uint8_t>& data, uint64_t /*timestamp*/) {
-        lhp_lib_->set_canfd_data_decode(data.data(), data.size());
-      });
+  canfd_master_->setReceiveCallback([this](uint32_t /*id*/,
+                                           const std::vector<uint8_t>& data,
+                                           uint64_t /*timestamp*/) {
+    lhp_lib_->set_canfd_data_decode(data.data(), data.size());
+  });
 
   // 初始化LHandProLib库
   if (lhp_lib_->initial(lhplib::LCN_CANFD) != lhplib::LER_NONE) {
@@ -194,7 +197,7 @@ void HandControlService::check_and_reconnect() {
   }
 }
 
-void HandControlService::init_config() {  
+void HandControlService::init_config() {
   int total = 0, active = 0;
   lhp_lib_->get_dof(&total, &active);
   RCLCPP_INFO(this->get_logger(), "连接成功，总自由度: %d，主动自由度: %d",
@@ -269,7 +272,7 @@ void HandControlService::init_service() {
   set_enable_srv_ =
       REGISTER_SERVICE(SetEnable, SRV_NAME_SET_ENABLE, set_enable_callback);
   get_now_alarm_srv_ = REGISTER_SERVICE(GetNowAlarm, SRV_NAME_GET_NOW_ALARM,
-                                       get_now_alarm_callback);
+                                        get_now_alarm_callback);
   set_position_srv_ = REGISTER_SERVICE(SetPosition, SRV_NAME_SET_POSITION,
                                        set_position_callback);
   get_position_srv_ = REGISTER_SERVICE(GetPosition, SRV_NAME_GET_POSITION,
@@ -301,6 +304,8 @@ void HandControlService::init_service() {
       REGISTER_SERVICE(HomeMotors, SRV_NAME_HOME_MOTORS, home_motors_callback);
   move_motors_srv_ =
       REGISTER_SERVICE(MoveMotors, SRV_NAME_MOVE_MOTORS, move_motors_callback);
+  control_motors_srv_ = REGISTER_SERVICE(ControlMotors, SRV_NAME_CONTROL_MOTORS,
+                                         control_motors_callback);
 }
 
 void HandControlService::set_enable_callback(
@@ -322,7 +327,7 @@ void HandControlService::set_enable_callback(
 void HandControlService::get_now_alarm_callback(
     const std::shared_ptr<lhandpro_interfaces::srv::GetNowAlarm::Request> req,
     std::shared_ptr<lhandpro_interfaces::srv::GetNowAlarm::Response> res) {
-    const char* service_name = SRV_NAME_GET_NOW_ALARM;
+  const char* service_name = SRV_NAME_GET_NOW_ALARM;
   if (!check_joint_validity(req->joint_id, service_name)) {
     res->alarm = 0;
     return;
@@ -595,5 +600,70 @@ void HandControlService::move_motors_callback(
     RCLCPP_INFO(this->get_logger(), "驱动关节 %d 运动 : %d", req->joint_id,
                 retn);
   }
+  res->result = retn;
+}
+
+void HandControlService::control_motors_callback(
+    const std::shared_ptr<lhandpro_interfaces::srv::ControlMotors::Request> req,
+    std::shared_ptr<lhandpro_interfaces::srv::ControlMotors::Response> res) {
+  const char* service_name = SRV_NAME_CONTROL_MOTORS;
+
+  RCLCPP_INFO(this->get_logger(), "[%s] 收到控制请求", service_name);
+
+  // 将请求参数组织到数组中
+  struct MotorParams {
+    int32_t position;
+    int32_t velocity;
+    int32_t current;
+  };
+
+  MotorParams params[6] = {{req->position_1, req->velocity_1, req->current_1},
+                           {req->position_2, req->velocity_2, req->current_2},
+                           {req->position_3, req->velocity_3, req->current_3},
+                           {req->position_4, req->velocity_4, req->current_4},
+                           {req->position_5, req->velocity_5, req->current_5},
+                           {req->position_6, req->velocity_6, req->current_6}};
+
+  // 使用循环设置所有电机参数
+  for (int i = 0; i < 6; i++) {
+    int motor_id = i + 1;  // 电机ID从1开始
+    int retn = 0;
+
+    retn = lhp_lib_->set_target_position(motor_id, params[i].position);
+    if (retn != 0) {
+      RCLCPP_WARN(this->get_logger(), "[%s] 设置电机%d位置失败: %d",
+                  service_name, motor_id, retn);
+      res->result = retn;
+      return;
+    }
+
+    retn = lhp_lib_->set_position_velocity(motor_id, params[i].velocity);
+    if (retn != 0) {
+      RCLCPP_WARN(this->get_logger(), "[%s] 设置电机%d速度失败: %d",
+                  service_name, motor_id, retn);
+      res->result = retn;
+      return;
+    }
+
+    retn = lhp_lib_->set_max_current(motor_id, params[i].current);
+    if (retn != 0) {
+      RCLCPP_WARN(this->get_logger(), "[%s] 设置电机%d电流失败: %d",
+                  service_name, motor_id, retn);
+      res->result = retn;
+      return;
+    }
+  }
+
+  // 启动所有电机运动
+  int retn = lhp_lib_->move_motors(0);
+  if (retn != 0) {
+    RCLCPP_WARN(this->get_logger(), "[%s] 驱动电机失败: %d", service_name,
+                retn);
+    res->result = retn;
+    return;
+  }
+
+  RCLCPP_INFO(this->get_logger(), "[%s] 所有电机运动完成: %d", service_name,
+              retn);
   res->result = retn;
 }

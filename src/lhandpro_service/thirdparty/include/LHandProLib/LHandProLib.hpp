@@ -2,6 +2,7 @@
 #define LHANDPROLIB_HPP
 
 /// @brief 定义导出/导入符号
+///        Define export/import symbols
 #if defined(_WIN32) || defined(_WIN64)
 #ifdef LHandProLib_EXPORTS
 #define LHANDPRO_API __declspec(dllexport)
@@ -13,149 +14,246 @@
 #endif
 
 /// @brief 名字空间
+///        Namespace
 namespace lhplib {
 /// @brief 错误码枚举
+///        Error code enum
 enum {
   LER_NONE = 0,           ///< 执行成功
+                          ///< Success
   LER_PARAMETER,          ///< 参数错误
+                          ///< Parameter error
   LER_KEY_FUNC_UNINIT,    ///< 关键函数未初始化
+                          ///< Key function uninitialized
   LER_GET_CONFIGURATION,  ///< 读取配置失败
+                          ///< Failed to read configuration
   LER_DATA_ANOMALY,       ///< 数据异常
+                          ///< Data anomaly
   LER_COMM_CONNECT,       ///< 通讯连接错误
+                          ///< Communication connection error
   LER_COMM_SEND,          ///< 通讯发送错误
+                          ///< Communication send error
   LER_COMM_RECV,          ///< 通讯接收错误
+                          ///< Communication receive error
   LER_COMM_DATA_FORMAT,   ///< 通讯数据格式错误
+                          ///< Communication data format error
   LER_INVALID_PATH,       ///< 无效的文件路径
+                          ///< Invalid file path
   LER_LOG_SAVE_FAIL,      ///< 日志文件保存失败
+                          ///< Log file save failed
   LER_NOT_HOME,           ///< 没回零错误
+                          ///< Not homed error
   LER_UNKNOWN = 999,      ///< 未知错误
+                          ///< Unknown error
 };
 
 /// @brief 灵巧手类型枚举
+///        Dexterous hand type enum
 enum {
-  LAC_DOF_6 = 0,    ///< 6自由度
-  LAC_DOF_6_S,      ///< 6自由度(S版本)
-  LAC_DOF_15,       ///< 15自由度
-  LAC_DOF_6_CUSTOM  ///< 6自由度(自定义)
+  LAC_DOF_6 = 0,  ///< 6自由度
+                  ///< 6 DOF
+  LAC_DOF_6_S,    ///< 6自由度(S版本)
+                  ///< 6 DOF (S version)
 };
 
 /// @brief 通讯类型枚举
+///        Communication type enum
 enum {
   LCN_ECAT = 0,  ///< EtherCAT
+                 ///< EtherCAT
   LCN_CANFD,     ///< CANFD
+                 ///< CANFD
   LCN_RS485,     ///< RS485
+                 ///< RS485
 };
 
 /// @brief 控制模式枚举
+///        Control mode enum
 enum {
   LCM_POSITION = 0,  ///< 位置控制
+                     ///< Position control
   LCM_VELOCITY,      ///< 速度控制
+                     ///< Velocity control
   LCM_TORQUE,        ///< 力矩控制
+                     ///< Torque control
   LCM_VEL_TOR,       ///< 速度+力矩混合控制
+                     ///< Velocity+Torque hybrid control
   LCM_POS_TOR,       ///< 位置+力矩混合控制
+                     ///< Position+Torque hybrid control
   LCM_HOME,          ///< 回零
+                     ///< Homing
 };
 
 /// @brief 力矩到位控制模式
+///        Torque reached control mode
 enum {
   LTC_REACHED_HOLD = 0,  ///< 力矩到位后保持
+                         ///< Hold after torque reached
   LTC_REACHED_STOP,      ///< 力矩到位后停止
+                         ///< Stop after torque reached
 };
 
 
 /// @brief 运行状态枚举
+///        Running status enum
 enum {
   LST_STOPPED = 0,  ///< 正常停止状态
+                    ///< Normal stop status
   LST_RUNNING,      ///< 正常运行状态
+                    ///< Normal running status
   LST_ALARM,        ///< 报警停止状态
+                    ///< Alarm stop status
   LST_POS_LIMIT,    ///< 正限位状态
+                    ///< Positive limit status
   LST_NEG_LIMIT,    ///< 负限位状态
+                    ///< Negative limit status
   LST_BOTH_LIMIT,   ///< 正负限位状态
+                    ///< Both limit status
   LST_EMG_STOP,     ///< 急停状态
+                    ///< Emergency stop status
   LST_HOMING,       ///< 回零运行状态
+                    ///< Homing running status
 };
 
 /// @brief 报警类型枚举
+///        Alarm type enum
 enum {
   LAM_NULL = 0,   ///< 无报警
+                  ///< No alarm
   LAM_POS_ERR,    ///< 位置超差
+                  ///< Position error
   LAM_OVER_SPD,   ///< 超速
+                  ///< Over speed
   LAM_OVER_CUR,   ///< 过流
+                  ///< Over current
   LAM_OVER_LOAD,  ///< 过载
+                  ///< Over load
   LAM_OVER_VOL,   ///< 过压
+                  ///< Over voltage
   LAM_UNDER_VOL,  ///< 欠压
+                  ///< Under voltage
   LAM_ENC_ERR,    ///< 编码器错误
+                  ///< Encoder error
   LAM_STALL,      ///< 堵转
+                  ///< Stall
   LAM_OTHER,      ///< 其他报警
+                  ///< Other alarm
 };
 
 /// @brief 传感器id枚举
+///        Sensor ID enum
 enum {
   LSS_FINGER_1_1 = 1,  ///< 大拇指指尖
+                       ///< Thumb tip
   LSS_FINGER_1_2,      ///< 大拇指指腹
+                       ///< Thumb pad
   LSS_FINGER_2_1,      ///< 食指指尖
+                       ///< Index finger tip
   LSS_FINGER_2_2,      ///< 食指指腹
+                       ///< Index finger pad
   LSS_FINGER_3_1,      ///< 中指指尖
+                       ///< Middle finger tip
   LSS_FINGER_3_2,      ///< 中指指腹
+                       ///< Middle finger pad
   LSS_FINGER_4_1,      ///< 无名指指尖
+                       ///< Ring finger tip
   LSS_FINGER_4_2,      ///< 无名指指腹
+                       ///< Ring finger pad
   LSS_FINGER_5_1,      ///< 小拇指指尖
+                       ///< Little finger tip
   LSS_FINGER_5_2,      ///< 小拇指指腹
+                       ///< Little finger pad
   LSS_HAND_PALM,       ///< 手掌
+                       ///< Palm
   LSS_MAX_COUNT,       ///< 最大传感器数量
+                       ///< Maximum sensor count
 };
 
 /// @brief 左右手枚举
+///        Hand side enum
 enum {
   LDR_HAND_RIGHT = 0,  ///< 右手
+                       ///< Right hand
   LDR_HAND_LEFT        ///< 左手
+                       ///< Left hand
 };
 
-/// @brief 函数指针
+/// @brief 函数指针类型定义
+///        Function pointer type definition
 typedef void (*LogAddCallback)(const char*);
 typedef bool (*ECSendDataCallback)(const unsigned char*, unsigned int);
-typedef bool (*CANFDSendDataCallback)(const unsigned char*, unsigned int);
+typedef bool (*CANFDSendDataCallback)(unsigned int, const unsigned char*,
+                                      unsigned int);
 
 #define L_DECLARE_PRIVATE(Class) \
   Class##Private* d_ptr;         \
   friend class Class##Private;
 
 /// @brief 前置声明
+///        Forward declaration
 class LHandProLibPrivate;
 
 /// @brief LHandProLib类
+///        LHandProLib class
 class LHANDPRO_API LHandProLib {
   L_DECLARE_PRIVATE(LHandProLib)
  public:
   /// @brief 构造函数
+  ///        Constructor
   LHandProLib();
 
   /// @brief 析构函数
+  ///        Destructor
   ~LHandProLib();
 
   /// @brief 初始化灵巧手驱动程序
+  ///        Initialize dexterous hand driver
   /// @param mode 通讯模式 LCN_ECAT/LCN_CANFD/LCN_485
+  ///        mode: Communication mode LCN_ECAT/LCN_CANFD/LCN_485
   /// @return 0 - 执行成功, 其他 - 参考错误码
+  ///        0 - Success, others - Refer to error codes
   /// @example
   ///           [注意] 在调用initial之前, 请先按下方流程进行
+  ///           [Note] Before calling initial, please follow the steps below
   ///           1. 自行初始化通讯对象, 例如EtherCAT
+  ///           1. Initialize communication object by yourself, such as EtherCAT
   ///           2. 对通讯对象进行连接
+  ///           2. Connect the communication object
   ///           3. 进行发送数据[回调]函数的处理, 详见set_send_rpdo_callback(ex)
+  ///           3. Handle send data [callback] function, see set_send_rpdo_callback(ex)
   ///           4. 进行接收数据[回调]函数的处理, 详见set_tpdo_data_decode
+  ///           4. Handle receive data [callback] function, see set_tpdo_data_decode
   ///           5. 对库进行初始化initial(LCN_ECAT)
+  ///           5. Initialize the library with initial(LCN_ECAT)
   int initial(int mode);
 
+  /// @brief 初始化灵巧手驱动程序(指定CANFD节点ID)
+  ///        Initialize dexterous hand driver (specify CANFD node ID)
+  /// @param mode 通讯模式 LCN_CANFD
+  ///        mode: Communication mode LCN_CANFD
+  /// @param node_id 节点ID
+  ///        node_id: Node ID
+  /// @return 0 - 执行成功, 其他 - 参考错误码
+  ///        0 - Success, others - Refer to error codes
+  int initial(int mode, unsigned int node_id);
+
   /// @brief 关闭灵巧手驱动程序
+  ///        Close dexterous hand driver
   /// @example
+  ///           lhp_lib->close();
   ///           lhp_lib->close();
   void close();
 
   /// @brief 发送数据回调函数(EtherCAT)
+  ///        Send data callback function (EtherCAT)
   /// @param callback 函数指针
+  ///        callback: Function pointer
   /// @example
   ///           // 1. 定义EtherCAT主站对象
+  ///           // 1. Define EtherCAT master object
   ///           auto ec_master_ = std::make_shared<EthercatMaster>();
   ///           // 2. 处理EtherCAT发送数据的回调
+  ///           // 2. Handle EtherCAT send data callback
   ///           lhp_lib_->set_send_rpdo_callback(
   ///               [](const unsigned char* data, unsigned int size) {
   ///                 return ec_master_->setOutputs(data, size);
@@ -163,245 +261,335 @@ class LHANDPRO_API LHandProLib {
   void set_send_rpdo_callback(ECSendDataCallback callback);
 
   /// @brief 发送数据回调函数(EtherCAT)(使用时需使用std::function包装)
-  /// @param callback_impl 函数指针(必须保证该 std::function 对象生命周期长于
-  /// LHandProLib 实例)
+  ///        Send data callback function (EtherCAT) (must use std::function wrapper when using)
+  /// @param callback_impl 函数指针(必须保证该 std::function 对象生命周期长于 LHandProLib 实例)
+  ///        callback_impl: Function pointer (must ensure the std::function object lifetime is longer than LHandProLib instance)
   /// @example
   ///           // 1. 定义EtherCAT主站对象
+  ///           // 1. Define EtherCAT master object
   ///           auto ec_master_ = std::make_shared<EthercatMaster>();
   ///           // 2. EtherCAT的发送函数
+  ///           // 2. EtherCAT send function
   ///           auto send_func = [ec_master_](const unsigned char* data,
   ///                                    unsigned int size) {
   ///             return ec_master_->setOutputs(data, size);
   ///           };
-  ///           // 3. 使用std::function包装(必须保证该 std::function
-  ///           对象生命周期长于 LHandProLib 实例) std::function<bool(const
-  ///           unsigned char*, unsigned int)> func =
-  ///               send_func;
+  ///           // 3. 使用std::function包装(必须保证该 std::function 对象生命周期长于 LHandProLib 实例)
+  ///           // 3. Use std::function wrapper (must ensure the std::function
+  ///           // object lifetime is longer than LHandProLib instance)
+  ///           std::function<bool(const unsigned char*, unsigned int)> func = send_func;
   ///           // 4. 处理EtherCAT发送数据的回调
+  ///           // 4. Handle EtherCAT send data callback
   ///           lhp_lib_->set_send_rpdo_callback_ex(&func);
   void set_send_rpdo_callback_ex(void* callback_impl);
 
-  /// @brief 获取预发送区的 RPDO
-  /// 数据,如设置了set_send_rpdo_callback(ex)回调,则会同时调用发送
+  /// @brief 获取预发送区的 RPDO 数据,如设置了set_send_rpdo_callback(ex)回调,则会同时调用发送
+  ///        Get RPDO data in pre-send area, if set_send_rpdo_callback(ex) callback is set, it will call send simultaneously
   /// @param data_ptr 返回的数据指针（nullptr 时仅获取长度）
+  ///        data_ptr: Returned data pointer (only get length when nullptr)
   /// @param io_size 输入时表示缓冲区大小，输出时返回实际数据大小
+  ///        io_size: Input indicates buffer size, output returns actual data size
   /// @return 0 - 成功，其他 - 错误码
+  ///        0 - Success, others - Error code
   /// @example
   ///           // 1. 第一次调用获取数据长度
+  ///           // 1. First call to get data length
   ///           int size = 0;
   ///           lhp_lib_->get_pre_send_rpdo_data(nullptr, &size);
   ///           // 2. 第二次调用获取实际预发送区的字节数组
+  ///           // 2. Second call to get actual pre-send area byte array
   ///           std::vector<unsigned char> rpdo_data(size);
   ///           lhp_lib_->get_pre_send_rpdo_data(rpdo_data.data(), &size);
   int get_pre_send_rpdo_data(unsigned char* data_ptr, int* io_size);
 
   /// @brief 解码传入的 TPDO 数据
+  ///        Decode incoming TPDO data
   /// @param data_ptr 待解码的数据指针
+  ///        data_ptr: Data pointer to be decoded
   /// @param data_size 数据长度
+  ///        data_size: Data length
   /// @return 0 成功，其他错误码
+  ///        0 - Success, others - Error code
   /// @example
   ///           // 1. 使用SDK 对 EtherCAT 获取上来的TPDO数据进行解码
+  ///           // 1. Use SDK to decode TPDO data obtained from EtherCAT
   ///           std::vector<unsigned char> tpdo_data;
-  ///           lhp_lib_->set_tpdo_data_decode(tpdo_data.data(),
-  ///           tpdo_data.size());
-  ///           // 2.
-  ///           解码后则可以使用SDK的接口获取目标数据,如get_now_angle,get_finger_pressure等
+  ///           lhp_lib_->set_tpdo_data_decode(tpdo_data.data(), tpdo_data.size());
+  ///           // 2. 解码后则可以使用SDK的接口获取目标数据,如get_now_angle,get_finger_pressure等
+  ///           // 2. After decoding, you can use SDK interfaces to get target data, such as get_now_angle, get_finger_pressure, etc.
   int set_tpdo_data_decode(const unsigned char* data_ptr, int data_size);
 
   /// @brief 发送数据回调函数(CANFD)
+  ///        Send data callback function (CANFD)
   /// @param callback 函数指针
+  ///        callback: Function pointer
   /// @example
   ///           // 1. 定义CANFD主站对象
+  ///           // 1. Define CANFD master object
   ///           auto canfd_master_ = std::make_shared<CANFDMaster>();
   ///           // 2. 处理CANFD发送数据的回调
+  ///           // 2. Handle CANFD send data callback
   ///           lhp_lib_->set_send_canfd_callback(
-  ///               [](const unsigned char* data, unsigned int size) {
-  ///                 return canfd_master_->sendData(0x500 + 1, data, size);
+  ///               [](unsigned int id, const unsigned char* data, unsigned int size) {
+  ///                 return canfd_master_->sendData(id, data, size);
   ///               });
   void set_send_canfd_callback(CANFDSendDataCallback callback);
 
   /// @brief 发送数据回调函数(CANFD)(使用时需使用std::function包装)
-  /// @param callback_impl 函数指针(必须保证该 std::function 对象生命周期长于
-  /// LHandProLib 实例)
+  ///        Send data callback function (CANFD) (must use std::function wrapper when using)
+  /// @param callback_impl 函数指针(必须保证该 std::function 对象生命周期长于 LHandProLib 实例)
+  ///        callback_impl: Function pointer (must ensure the std::function object lifetime is longer than LHandProLib instance)
   /// @example
   ///           // 1. 定义CANFD主站对象
+  ///           // 1. Define CANFD master object
   ///           auto canfd_master_ = std::make_shared<CANFDMaster>();
   ///           // 2. CANFD的发送函数
+  ///           // 2. CANFD send function
   ///           auto send_func = [canfd_master_](const unsigned char* data,
   ///           unsigned int size) {
   ///             return canfd_master_->sendData(0x500 + 1, data, size);
   ///           };
-  ///           // 3. 使用std::function包装(必须保证该 std::function
-  ///           对象生命周期长于 LHandProLib 实例) std::function<bool(const
-  ///           unsigned char*, unsigned int)> func =
-  ///               send_func;
+  ///           // 3. 使用std::function包装(必须保证该 std::function 对象生命周期长于 LHandProLib 实例)
+  ///           // 3. Use std::function wrapper (must ensure the std::function object lifetime is longer than LHandProLib instance)
+  ///           std::function<bool(const unsigned char*, unsigned int)> func = send_func;
   ///           // 4. 处理CANFD发送数据的回调
+  ///           // 4. Handle CANFD send data callback
   ///           lhp_lib_->set_send_canfd_callback_ex(&func);
   void set_send_canfd_callback_ex(void* callback_impl);
 
-  /// @brief 获取预发送区的 CANFD
-  /// 数据,如设置了set_send_canfd_callback(ex)回调,则会同时调用发送
+  /// @brief 获取预发送区的 CANFD 数据,如设置了set_send_canfd_callback(ex)回调,则会同时调用发送
+  ///        Get CANFD data in pre-send area, if set_send_canfd_callback(ex) callback is set, it will call send simultaneously
   /// @param data_ptr 返回的数据指针（nullptr 时仅获取长度）
+  ///        data_ptr: Returned data pointer (only get length when nullptr)
   /// @param io_size 输入时表示缓冲区大小，输出时返回实际数据大小
+  ///        io_size: Input indicates buffer size, output returns actual data size
   /// @return 0 - 成功，其他 - 错误码
+  ///        0 - Success, others - Error code
   /// @example
   ///           // 1. 第一次调用获取数据长度
+  ///           // 1. First call to get data length
   ///           int size = 0;
   ///           lhp_lib_->get_pre_send_canfd_data(nullptr, &size);
   ///           // 2. 第二次调用获取实际预发送区的字节数组
+  ///           // 2. Second call to get actual pre-send area byte array
   ///           std::vector<unsigned char> canfd_data(size);
   ///           lhp_lib_->get_pre_send_canfd_data(canfd_data.data(), &size);
   int get_pre_send_canfd_data(unsigned char* data_ptr, int* io_size);
 
   /// @brief 解码传入的 CANFD 数据
+  ///        Decode incoming CANFD data
+  /// @param id CANFD ID
+  ///        id: CANFD ID
   /// @param data_ptr 待解码的数据指针
+  ///        data_ptr: Data pointer to be decoded
   /// @param data_size 数据长度
+  ///        data_size: Data length
   /// @return 0 成功，其他错误码
+  ///        0 - Success, others - Error code
   /// @example
-  ///           // 1. 使用SDK 对 CANFD 获取上来的TPDO数据进行解码
+  ///           // 1. 使用SDK 对 CANFD 反馈的数据进行解码
+  ///           // 1. Use SDK to decode CANFD feedback data
   ///           std::vector<unsigned char> canfd_data;
   ///           lhp_lib_->set_canfd_data_decode(canfd_data.data(),
   ///           canfd_data.size());
-  ///           // 2.
-  ///           解码后则可以使用SDK的接口获取目标数据,如get_now_angle,get_finger_pressure等
-  int set_canfd_data_decode(const unsigned char* data_ptr, int data_size);
+  ///           // 2. 解码后则可以使用SDK的接口获取目标数据,如get_now_angle,get_finger_pressure等
+  ///           // 2. After decoding, you can use SDK interfaces to get target data, such as get_now_angle, get_finger_pressure, etc.
+  int set_canfd_data_decode(unsigned int id, const unsigned char* data_ptr,
+                            int data_size);
 
   /// @brief 获取当前灵巧手自由度数量
+  ///        Get current dexterous hand degree of freedom
   /// @param total 自由度总数量, 即关节数量
+  ///        total: Total number of degrees of freedom, i.e., joint count
   /// @param active 主动自由度数量, 即电机数量
+  ///        active: Active degrees of freedom, i.e., motor count
   /// @return 0 - 执行成功, 其他 - 参考错误码
+  ///        0 - Success, others - Refer to error codes
   /// @example
   ///           int total_dof, active_dof;
   ///           lhp_lib->get_dof(&total_dof, &active_dof);
   int get_dof(int* total, int* active);
 
   /// @brief 设置灵巧手类型,根据枚举进行设置 默认 LAC_DOF_6
+  ///        Set dexterous hand type, set according to enum, default LAC_DOF_6
   /// @param hand_type 灵巧手类型
+  ///        hand_type: Dexterous hand type
   /// @return 0 - 执行成功, 其他 - 参考错误码
+  ///        0 - Success, others - Refer to error codes
   /// @example
   ///           lhp_lib->set_hand_type(LAC_DOF_6);
   int set_hand_type(int hand_type);
 
   /// @brief 获取当前灵巧手类型
+  ///        Get current dexterous hand type
   /// @param hand_type 灵巧手类型
+  ///        hand_type: Dexterous hand type
   /// @return 0 - 执行成功, 其他 - 参考错误码
+  ///        0 - Success, others - Refer to error codes
   /// @example
   ///           int hand_type;
   ///           lhp_lib->get_hand_type(&hand_type);
   int get_hand_type(int* hand_type);
 
-  /// @brief 设置自定义手(LAC_DOF_6_CUSTOM)的手指与轴映射顺序
-  ///           按照 大拇指侧摆, 大拇指弯曲, 食指弯曲, 中指弯曲, 无名指弯曲, 小拇指弯曲 的顺序
-  /// @param order 指向整数数组的指针
-  /// @param size 数组大小，必须为6
-  /// @return 0 - 执行成功, 其他 - 参考错误码
-  /// @example
-  ///           int standard_order[6] = {0, 1, 2, 3, 4, 5};
-  ///           lhp_lib->set_finger_order(standard_order, 6);
-  int set_finger_order(const int* order, int size);
-
   /// @brief 设置手的方向(默认即为右手LDR_HAND_RIGHT)
+  ///        Set hand direction (default is right hand LDR_HAND_RIGHT)
   /// @param dir LDR_HAND_RIGHT/LDR_HAND_LEFT
+  ///        dir: LDR_HAND_RIGHT/LDR_HAND_LEFT
   /// @return 0 - 执行成功, 其他 - 参考错误码
+  ///        0 - Success, others - Refer to error codes
   /// @example
   ///           lhp_lib->set_hand_direction(LDR_HAND_RIGHT);
   int set_hand_direction(int dir);
 
   /// @brief 获取手的方向
+  ///        Get hand direction
   /// @param dir LDR_HAND_RIGHT/LDR_HAND_LEFT
+  ///        dir: LDR_HAND_RIGHT/LDR_HAND_LEFT
   /// @return 0 - 执行成功, 其他 - 参考错误码
+  ///        0 - Success, others - Refer to error codes
   /// @example
   ///           int hand_dir;
   ///           lhp_lib->get_hand_direction(&hand_dir);
   int get_hand_direction(int* dir);
 
   /// @brief 设置电机控制模式
+  ///        Set motor control mode
   /// @param id 电机ID, [0, DOF=自由度数量], 0表示广播,
+  ///        id: Motor ID, [0, DOF=degree of freedom], 0 means broadcast,
   ///       1~DOF表示单个ID设置
+  ///        1~DOF means single ID setting
   /// @param mode 控制模式 0:位置控制 1:速度控制 2:力矩控制
+  ///        mode: Control mode 0:Position control 1:Velocity control 2:Torque control
   ///       3:速度+力矩混合控制 4:位置+力矩混合控制 5:回零
+  ///        3:Velocity+Torque hybrid control 4:Position+Torque hybrid control 5:Homing
   /// @return 0 - 执行成功, 其他 - 参考错误码
+  ///        0 - Success, others - Refer to error codes
   /// @example
   ///           lhp_lib->set_control_mode(1, LCM_POSITION);
   int set_control_mode(int id, int mode = LCM_POSITION);
 
   /// @brief 获取电机控制模式
+  ///        Get motor control mode
   /// @param id 电机ID, [1, DOF=自由度数量]
+  ///        id: Motor ID, [1, DOF=degree of freedom]
   /// @param mode 控制模式 0:位置控制 1:速度控制 2:力矩控制
+  ///        mode: Control mode 0:Position control 1:Velocity control 2:Torque control
   ///       3:速度+力矩混合控制 4:位置+力矩混合控制 5:回零
+  ///        3:Velocity+Torque hybrid control 4:Position+Torque hybrid control 5:Homing
   /// @return 0 - 执行成功, 其他 - 参考错误码
+  ///        0 - Success, others - Refer to error codes
   /// @example
   ///           int control_mode;
   ///           lhp_lib->get_control_mode(1, &control_mode);
   int get_control_mode(int id, int* mode);
 
   /// @brief 设置力矩控制模式
+  ///        Set torque control mode
   /// @param id 电机ID, [0, DOF=自由度数量], 0表示广播,
+  ///        id: Motor ID, [0, DOF=degree of freedom], 0 means broadcast,
   ///       1~DOF表示单个ID设置
+  ///        1~DOF means single ID setting
   /// @param mode 力矩控制模式 0:力矩到位后保持 1:力矩到位后停止
+  ///        mode: Torque control mode 0:Hold after torque reached 1:Stop after torque reached
   /// @return 0 - 执行成功, 其他 - 参考错误码
+  ///        0 - Success, others - Refer to error codes
   /// @example
   ///           lhp_lib->set_torque_control_mode(1, LTC_REACHED_HOLD);
   int set_torque_control_mode(int id, int mode);
 
   /// @brief 获取力矩控制模式
+  ///        Get torque control mode
   /// @param id 电机ID, [1, DOF=自由度数量]
+  ///        id: Motor ID, [1, DOF=degree of freedom]
   /// @param mode 力矩控制模式 0:力矩到位后保持 1:力矩到位后停止
+  ///        mode: Torque control mode 0:Hold after torque reached 1:Stop after torque reached
   /// @return 0 - 执行成功, 其他 - 参考错误码
+  ///        0 - Success, others - Refer to error codes
   /// @example
   ///           int torque_mode;
   ///           lhp_lib->get_torque_control_mode(1, &torque_mode);
   int get_torque_control_mode(int id, int* mode);
 
   /// @brief 设置电机使能/禁止
+  ///        Set motor enable/disable
   /// @param id 电机ID, [0, DOF=自由度数量], 0表示广播,
+  ///        id: Motor ID, [0, DOF=degree of freedom], 0 means broadcast,
   ///       1~DOF表示单个ID设置
+  ///        1~DOF means single ID setting
   /// @param enable 使能/禁止 0:禁止 1:使能
+  ///        enable: Enable/disable 0:Disable 1:Enable
   /// @return 0 - 执行成功, 其他 - 参考错误码
+  ///        0 - Success, others - Refer to error codes
   /// @example
-  ///           lhp_lib->set_enable(1, 1);  // 使能电机1
+  ///           // 使能电机1
+  ///           // Enable motor 1
+  ///           lhp_lib->set_enable(1, 1);
   int set_enable(int id, int enable);
 
   /// @brief 获取电机使能/禁止
+  ///        Get motor enable/disable status
   /// @param id 电机ID, [1, DOF=自由度数量]
+  ///        id: Motor ID, [1, DOF=degree of freedom]
   /// @param enable 使能/禁止 0:禁止 1:使能
+  ///        enable: Enable/disable 0:Disable 1:Enable
   /// @return 0 - 执行成功, 其他 - 参考错误码
+  ///        0 - Success, others - Refer to error codes
   /// @example
   ///           int is_enabled;
   ///           lhp_lib->get_enable(1, &is_enabled);
   int get_enable(int id, int* enable);
 
   /// @brief 获取电机到位信号
+  ///        Get motor position reached signal
   /// @param id 电机ID, [1, DOF=自由度数量]
+  ///        id: Motor ID, [1, DOF=degree of freedom]
   /// @param reached 是否到位, 1:到位 0:运动中
+  ///        reached: Whether reached, 1:Reached 0:Moving
   /// @return 0 - 执行成功, 其他 - 参考错误码
+  ///        0 - Success, others - Refer to error codes
   /// @example
   ///           int is_reached;
   ///           lhp_lib->get_position_reached(1, &is_reached);
   int get_position_reached(int id, int* reached);
 
   /// @brief 获取力矩到位信号
+  ///        Get torque reached signal
   /// @param id 电机ID, [1, DOF=自由度数量]
+  ///        id: Motor ID, [1, DOF=degree of freedom]
   /// @param reached 是否到位, 1:到位 0:没到位
+  ///        reached: Whether reached, 1:Reached 0:Not reached
   /// @return 0 - 执行成功, 其他 - 参考错误码
+  ///        0 - Success, others - Refer to error codes
   /// @example
   ///           int torque_reached;
   ///           lhp_lib->get_torque_reached(1, &torque_reached);
   int get_torque_reached(int id, int* reached);
 
   /// @brief 清除电机报警
+  ///        Clear motor alarm
   /// @param id 电机ID, [0, DOF=自由度数量], 0表示广播,
+  ///        id: Motor ID, [0, DOF=degree of freedom], 0 means broadcast,
   ///       1~DOF表示单个ID设置
+  ///        1~DOF means single ID setting
   /// @return 0 - 执行成功, 其他 - 参考错误码
+  ///        0 - Success, others - Refer to error codes
   /// @example
-  ///           lhp_lib->set_clear_alarm(1);  // 清除电机1的报警
-  ///           lhp_lib->set_clear_alarm();  // 清除所有电机的报警
+  ///           // 清除电机1的报警
+  ///           // Clear alarm of motor 1
+  ///           lhp_lib->set_clear_alarm(1);
+  ///           // 清除所有电机的报警
+  ///           // Clear alarm of all motors
+  ///           lhp_lib->set_clear_alarm();
   int set_clear_alarm(int id = 0);
 
   /// @brief 获取当前报警状态
+  ///        Get current alarm status
   /// @param id 电机ID, [1, DOF=自由度数量]
+  ///        id: Motor ID, [1, DOF=degree of freedom]
   /// @param alarm 报警状态, 参考 LAM_* 报警码枚举
+  ///        alarm: Alarm status, refer to LAM_* alarm code enum
   /// @return 0 - 执行成功, 其他 - 参考错误码
+  ///        0 - Success, others - Refer to error codes
   /// @example
   ///           int alarm_status;
   ///           lhp_lib->get_now_alarm(1, &alarm_status);
@@ -409,304 +597,471 @@ class LHANDPRO_API LHandProLib {
 
 
   /// @brief 是否允许在没回零状态下运动
+  ///        Whether to allow movement without homing
   /// @param enable 0: 不允许 1: 允许
-  /// @return
+  ///        enable: 0: Disallow 1: Allow
+  /// @return 0 - 执行成功, 其他 - 参考错误码
+  ///        0 - Success, others - Refer to error codes
   int set_move_no_home(int enable = 0);
 
   /// @brief 启动电机回零
+  ///        Start motor homing
   /// @param id 电机ID, [0, DOF=自由度数量], 0表示广播,
+  ///        id: Motor ID, [0, DOF=degree of freedom], 0 means broadcast,
   /// @return 0 - 执行成功, 其他 - 参考错误码
+  ///        0 - Success, others - Refer to error codes
   /// @example
-  ///           lhp_lib->home_motors(1);  // 启动电机1回零
-  ///           lhp_lib->home_motors(0);  // 启动所有电机回零
+  ///           // 启动电机1回零
+  ///           // Start motor 1 homing
+  ///           lhp_lib->home_motors(1);
+  ///           // 启动所有电机回零
+  ///           // Start all motors homing
+  ///           lhp_lib->home_motors(0);
   int home_motors(int id);
 
   /// @brief 获取电机目标角度上下限
+  ///        Get motor target angle limits
   /// @param id 电机ID, [1, DOF=自由度数量]
+  ///        id: Motor ID, [1, DOF=degree of freedom]
   /// @param min_angle 目标角度最小值
+  ///        min_angle: Minimum target angle
   /// @param max_angle 目标角度最大值
+  ///        max_angle: Maximum target angle
   /// @return 0 - 执行成功, 其他 - 参考错误码
+  ///        0 - Success, others - Refer to error codes
   /// @example
   ///           float min_angle, max_angle;
   ///           lhp_lib->get_limit_target_angle(1, &min_angle, &max_angle);
   int get_limit_target_angle(int id, float* min_angle, float* max_angle);
 
   /// @brief 设置电机目标角度
+  ///        Set motor target angle
   /// @param id 电机ID, [0, DOF=自由度数量]
+  ///        id: Motor ID, [0, DOF=degree of freedom]
   /// @param angle 目标角度, 范围[0,MAX=电机可达最大角度值],
+  ///        angle: Target angle, range [0,MAX=maximum reachable angle of motor],
   /// @return 0 - 执行成功, 其他 - 参考错误码
+  ///        0 - Success, others - Refer to error codes
   /// @example
   ///           // 设置电机1的目标角度为45度
+  ///           // Set target angle of motor 1 to 45 degrees
   ///           lhp_lib->set_target_angle(1, 45.0f);
   int set_target_angle(int id, float angle);
 
   /// @brief 获取最近一次设置的电机目标角度
+  ///        Get last set motor target angle
   /// @param id 电机ID, [1, DOF=自由度数量]
+  ///        id: Motor ID, [1, DOF=degree of freedom]
   /// @param angle 目标角度, 范围[0,MAX=电机可达最大角度值]
+  ///        angle: Target angle, range [0,MAX=maximum reachable angle of motor]
   /// @return 0 - 执行成功, 其他 - 参考错误码
+  ///        0 - Success, others - Refer to error codes
   /// @example
   ///           float target_angle;
   ///           lhp_lib->get_target_angle(1, &target_angle);
   int get_target_angle(int id, float* angle);
 
   /// @brief 设置电机目标位置（行程当量）
+  ///        Set motor target position (stroke equivalent)
   /// @param id 电机ID, 范围 [0, DOF=自由度数量]
+  ///        id: Motor ID, range [0, DOF=degree of freedom]
   /// @param position 目标位置, 范围 [0=起始位, 10000=满行程]
+  ///        position: Target position, range [0=start position, 10000=full stroke]
   /// @return 0 - 执行成功, 其他 - 参考错误码
+  ///        0 - Success, others - Refer to error codes
   /// @example
   ///           // 设置电机1的目标位置为5000（中间位置）
+  ///           // Set target position of motor 1 to 5000 (middle position)
   ///           lhp_lib->set_target_position(1, 5000);
   int set_target_position(int id, int position);
 
   /// @brief 获取最近一次设置的电机目标位置（行程当量）
+  ///        Get last set motor target position (stroke equivalent)
   /// @param id 电机ID, 范围 [1, DOF=自由度数量]
+  ///        id: Motor ID, range [1, DOF=degree of freedom]
   /// @param position 目标位置, 范围 [0=起始位, 10000=满行程]
+  ///        position: Target position, range [0=start position, 10000=full stroke]
   /// @return 0 - 执行成功, 其他 - 参考错误码
+  ///        0 - Success, others - Refer to error codes
   /// @example
   ///           int target_pos;
   ///           lhp_lib->get_target_position(1, &target_pos);
   int get_target_position(int id, int* position);
 
   /// @brief 设置电机目标速度(默认使用set_angular_velocity)
+  ///        Set motor target velocity (default uses set_angular_velocity)
   /// @param id 电机ID, [0, DOF=自由度数量]
+  ///        id: Motor ID, [0, DOF=degree of freedom]
   /// @param velocity 目标速度, 单位: °/s
+  ///        velocity: Target velocity, unit: °/s
   /// @return 0 - 执行成功, 其他 - 参考错误码
+  ///        0 - Success, others - Refer to error codes
   /// @example
   ///           // 设置电机1的目标速度为30度/秒
+  ///           // Set target velocity of motor 1 to 30 degrees/second
   ///           lhp_lib->set_velocity(1, 30.0f);
   int set_velocity(int id, float velocity);
 
   /// @brief 获取最近一次设置的电机目标速度(默认使用get_angular_velocity)
+  ///        Get last set motor target velocity (default uses get_angular_velocity)
   /// @param id 电机ID, [1, DOF=自由度数量]
+  ///        id: Motor ID, [1, DOF=degree of freedom]
   /// @param velocity 目标速度, 单位: °/s
+  ///        velocity: Target velocity, unit: °/s
   /// @return 0 - 执行成功, 其他 - 参考错误码
+  ///        0 - Success, others - Refer to error codes
   /// @example
   ///           float velocity;
   ///           lhp_lib->get_velocity(1, &velocity);
   int get_velocity(int id, float* velocity);
 
   /// @brief 设置电机目标速度
+  ///        Set motor target velocity
   /// @param id 电机ID, [0, DOF=自由度数量]
+  ///        id: Motor ID, [0, DOF=degree of freedom]
   /// @param velocity 目标速度, 单位: °/s
+  ///        velocity: Target velocity, unit: °/s
   /// @return 0 - 执行成功, 其他 - 参考错误码
+  ///        0 - Success, others - Refer to error codes
   /// @example
   ///           // 设置电机1的目标速度为30°/s
+  ///           // Set target velocity of motor 1 to 30°/s
   ///           lhp_lib->set_angular_velocity(1, 30.0f);
   int set_angular_velocity(int id, float velocity);
 
   /// @brief 获取最近一次设置的电机目标速度
+  ///        Get last set motor target velocity
   /// @param id 电机ID, [1, DOF=自由度数量]
+  ///        id: Motor ID, [1, DOF=degree of freedom]
   /// @param velocity 目标速度, 单位: °/s
+  ///        velocity: Target velocity, unit: °/s
   /// @return 0 - 执行成功, 其他 - 参考错误码
+  ///        0 - Success, others - Refer to error codes
   /// @example
   ///           float velocity;
   ///           lhp_lib->get_angular_velocity(1, &velocity);
   int get_angular_velocity(int id, float* velocity);
 
   /// @brief 设置电机目标速度（行程当量速度）
+  ///        Set motor target velocity (stroke equivalent velocity)
   /// @param id 电机ID, 范围 [0, DOF=自由度数量]
+  ///        id: Motor ID, range [0, DOF=degree of freedom]
   /// @param velocity 目标速度, 单位: 当量/秒（即每秒移动的当量数）
+  ///        velocity: Target velocity, unit: equivalent/second (i.e., number of equivalents moved per second)
   /// @return 0 - 执行成功, 其他 - 参考错误码
+  ///        0 - Success, others - Refer to error codes
   /// @example
   ///           // 设置电机1的目标位置速度为1000当量/秒
+  ///           // Set target position velocity of motor 1 to 1000 equivalents/second
   ///           lhp_lib->set_position_velocity(1, 1000);
   int set_position_velocity(int id, int velocity);
 
   /// @brief 获取最近一次设置的电机目标速度（行程当量速度）
+  ///        Get last set motor target velocity (stroke equivalent velocity)
   /// @param id 电机ID, 范围 [1, DOF=自由度数量]
+  ///        id: Motor ID, range [1, DOF=degree of freedom]
   /// @param velocity 输出参数，返回目标位置速度值（单位: 当量/秒）
+  ///        velocity: Output parameter, returns target position velocity value (unit: equivalent/second)
   /// @return 0 - 执行成功, 其他 - 参考错误码
+  ///        0 - Success, others - Refer to error codes
   /// @example
   ///           int pos_velocity;
   ///           lhp_lib->get_position_velocity(1, &pos_velocity);
   int get_position_velocity(int id, int* velocity);
 
   /// @brief 设置电机最大电流
+  ///        Set motor maximum current
   /// @param id 电机ID, [0, DOF=自由度数量]
+  ///        id: Motor ID, [0, DOF=degree of freedom]
   /// @param current 最大电流, 单位 ‰(千分比)
+  ///        current: Maximum current, unit: ‰ (per mille)
   /// @return 0 - 执行成功, 其他 - 参考错误码
+  ///        0 - Success, others - Refer to error codes
   /// @example
   ///           // 设置电机1的最大电流为500‰
+  ///           // Set maximum current of motor 1 to 500‰
   ///           lhp_lib->set_max_current(1, 500);
   int set_max_current(int id, int current);
 
   /// @brief 获取最近一次设置的电机最大电流
+  ///        Get last set motor maximum current
   /// @param id 电机ID, [1, DOF=自由度数量]
+  ///        id: Motor ID, [1, DOF=degree of freedom]
   /// @param current 最大电流, 单位 ‰(千分比)
+  ///        current: Maximum current, unit: ‰ (per mille)
   /// @return 0 - 执行成功, 其他 - 参考错误码
+  ///        0 - Success, others - Refer to error codes
   /// @example
   ///           int max_current;
   ///           lhp_lib->get_max_current(1, &max_current);
   int get_max_current(int id, int* current);
 
   /// @brief 驱动电机运动
+  ///        Drive motor movement
   /// @param id 电机ID, [0, DOF=自由度数量], 0表示广播,
+  ///        id: Motor ID, [0, DOF=degree of freedom], 0 means broadcast,
   ///       1~DOF表示单个ID设置
+  ///        1~DOF means single ID setting
   /// @return 0 - 执行成功, 其他 - 参考错误码
+  ///        0 - Success, others - Refer to error codes
   /// @example
   ///           // 驱动电机1运动
+  ///           // Drive motor 1 to move
   ///           lhp_lib->move_motors(1);
   ///           // 驱动所有电机运动
+  ///           // Drive all motors to move
   ///           lhp_lib->move_motors();
   int move_motors(int id = 0);
 
   /// @brief 停止电机运动
+  ///        Stop motor movement
   /// @param id 电机ID, [0, DOF=自由度数量], 0表示广播,
+  ///        id: Motor ID, [0, DOF=degree of freedom], 0 means broadcast,
   ///       1~DOF表示单个ID设置
+  ///        1~DOF means single ID setting
   /// @return 0 - 执行成功, 其他 - 参考错误码
+  ///        0 - Success, others - Refer to error codes
   /// @example
   ///           // 停止电机1运动
+  ///           // Stop motor 1 movement
   ///           lhp_lib->stop_motors(1);
   ///           // 停止所有电机运动
+  ///           // Stop all motors movement
   ///           lhp_lib->stop_motors();
   int stop_motors(int id = 0);
 
-  /// @brief 获取电机当前状态
-  /// @param id 电机ID, [1, DOF=自由度数量]
-  /// @param status 运行状态, 0：正常停止状态 1：正常运行状态 2：报警停止状态
-  ///       3：正限位状态 4：负限位状态 5：正负限位状态 6：急停状态
-  ///       7：回零运行状态
+  /// @brief 执行指定手势
+  ///        Execute specified gesture
+  /// @param gesture_id 执行的手势id
+  ///        gesture_id: Executed gesture id
+  /// @param velocity 目标速度, 单位: 当量/秒（即每秒移动的当量数）
+  ///        velocity: Target velocity, unit: equivalent/second (i.e., number of equivalents moved per second)
+  /// @param current 最大电流, 单位 ‰(千分比)
+  ///        current: Maximum current, unit: ‰ (per mille)
   /// @return 0 - 执行成功, 其他 - 参考错误码
+  ///        0 - Success, others - Refer to error codes
+  /// @example
+  ///           // 执行手势1, 目标速度为20000当量/秒, 最大电流为1000‰
+  ///           // Execute gesture 1, target velocity 20000 equivalents/second, maximum current 1000‰
+  ///           lhp_lib->play_gesture(1, 20000, 1000);
+  int play_gesture(int gesture_id, int velocity, int current);
+
+  /// @brief 获取电机当前状态
+  ///        Get current motor status
+  /// @param id 电机ID, [1, DOF=自由度数量]
+  ///        id: Motor ID, [1, DOF=degree of freedom]
+  /// @param status 运行状态, 0：正常停止状态 1：正常运行状态 2：报警停止状态
+  ///        status: Running status, 0: Normal stop status 1: Normal running status 2: Alarm stop status
+  ///       3：正限位状态 4：负限位状态 5：正负限位状态 6：急停状态
+  ///        3: Positive limit status 4: Negative limit status 5: Both limit status 6: Emergency stop status
+  ///       7：回零运行状态
+  ///        7: Homing running status
+  /// @return 0 - 执行成功, 其他 - 参考错误码
+  ///        0 - Success, others - Refer to error codes
   /// @example
   ///           int motor_status;
   ///           lhp_lib->get_now_status(1, &motor_status);
   int get_now_status(int id, int* status);
 
   /// @brief 获取电机当前角度位置
+  ///        Get current motor angle position
   /// @param id 电机ID, [1, DOF=自由度数量]
+  ///        id: Motor ID, [1, DOF=degree of freedom]
   /// @param angle 当前角度位置, 单位: °
+  ///        angle: Current angle position, unit: °
   /// @return 0 - 执行成功, 其他 - 参考错误码
+  ///        0 - Success, others - Refer to error codes
   /// @example
   ///           float current_angle;
   ///           lhp_lib->get_now_angle(1, &current_angle);
   int get_now_angle(int id, float* angle);
 
   /// @brief 获取电机当前行程位置
+  ///        Get current motor stroke position
   /// @param id 电机ID, [1, DOF=自由度数量]
+  ///        id: Motor ID, [1, DOF=degree of freedom]
   /// @param position 当前行程位置, 范围 [0=起始位, 10000=满行程]
+  ///        position: Current stroke position, range [0=start position, 10000=full stroke]
   /// @return 0 - 执行成功, 其他 - 参考错误码
+  ///        0 - Success, others - Refer to error codes
   /// @example
   ///           int current_position;
   ///           lhp_lib->get_now_position(1, &current_position);
   int get_now_position(int id, int* position);
 
   /// @brief 获取电机当前速度(单位:度, 默认使用get_now_angular_velocity)
+  ///        Get current motor velocity (unit: degree, default uses get_now_angular_velocity)
   /// @param id 电机ID, [1, DOF=自由度数量]
+  ///        id: Motor ID, [1, DOF=degree of freedom]
   /// @param velocity 当前速度, 单位: °/s
+  ///        velocity: Current velocity, unit: °/s
   /// @return 0 - 执行成功, 其他 - 参考错误码
+  ///        0 - Success, others - Refer to error codes
   /// @example
   ///           float current_velocity;
   ///           lhp_lib->get_now_velocity(1, &current_velocity);
   int get_now_velocity(int id, float* velocity);
 
   /// @brief 获取电机当前速度(单位:度)
+  ///        Get current motor velocity (unit: degree)
   /// @param id 电机ID, [1, DOF=自由度数量]
+  ///        id: Motor ID, [1, DOF=degree of freedom]
   /// @param velocity 当前速度, 单位: °/s
+  ///        velocity: Current velocity, unit: °/s
   /// @return 0 - 执行成功, 其他 - 参考错误码
+  ///        0 - Success, others - Refer to error codes
   /// @example
   ///           float current_angular_velocity;
   ///           lhp_lib->get_now_angular_velocity(1, &current_angular_velocity);
   int get_now_angular_velocity(int id, float* velocity);
 
   /// @brief 获取电机当前速度(单位:当量)
+  ///        Get current motor velocity (unit: equivalent)
   /// @param id 电机ID, [1, DOF=自由度数量]
+  ///        id: Motor ID, [1, DOF=degree of freedom]
   /// @param velocity 当前速度, 单位: 当量/s
+  ///        velocity: Current velocity, unit: equivalent/s
   /// @return 0 - 执行成功, 其他 - 参考错误码
+  ///        0 - Success, others - Refer to error codes
   /// @example
   ///           int current_pos_velocity;
   ///           lhp_lib->get_now_position_velocity(1, &current_pos_velocity);
   int get_now_position_velocity(int id, int* velocity);
 
-  /// @brief 获取电机当前速度
+  /// @brief 获取电机当前电流
+  ///        Get current motor current
   /// @param id 电机ID, [1, DOF=自由度数量]
+  ///        id: Motor ID, [1, DOF=degree of freedom]
   /// @param current 当前电流, 单位 ‰(千分比)
+  ///        current: Current current, unit: ‰ (per mille)
   /// @return 0 - 执行成功, 其他 - 参考错误码
+  ///        0 - Success, others - Refer to error codes
   /// @example
   ///           int current_current;
   ///           lhp_lib->get_now_current(1, &current_current);
   int get_now_current(int id, int* current);
 
   /// @brief 设置是否开启监控传感器
+  ///        Set whether to enable monitoring sensor
   /// @param enable 是否开启监控传感器
+  ///        enable: Whether to enable monitoring sensor
   /// @return 0 - 执行成功, 其他 - 参考错误码
+  ///        0 - Success, others - Refer to error codes
   /// @example
   ///           lhp_lib->set_sensor_enable(1);
   int set_sensor_enable(int enable);
 
   /// @brief 设置传感器数据格式
+  ///        Set sensor data format
   /// @param format 格式类型, 默认为0
+  ///        format: Format type, default is 0
   /// @return 0 - 执行成功, 其他 - 参考错误码
+  ///        0 - Success, others - Refer to error codes
   /// @example
   ///           lhp_lib->set_sensor_data_format(0);
   int set_sensor_data_format(int format);
 
   /// @brief 设置传感器的映射顺序
+  ///        Set sensor mapping order
   ///           按照 大拇指, 食指, 中指, 无名指, 小拇指 的顺序
+  ///           In the order of thumb, index finger, middle finger, ring finger, little finger
   /// @param order 指向整数数组的指针
+  ///        order: Pointer to integer array
   /// @param size 数组大小，必须为6
+  ///        size: Array size, must be 6
   /// @return 0 - 执行成功, 其他 - 参考错误码
+  ///        0 - Success, others - Refer to error codes
   /// @example
   ///           int standard_order[6] = {0, 1, 2, 3, 4, 5};
   ///           lhp_lib->set_sensor_order(standard_order, 6);
   int set_sensor_order(const int* order, int size);
 
   /// @brief 获取指定位置的触觉传感器分布位置
+  ///        Get tactile sensor distribution position at specified location
   /// @param sensor_id 传感器的id,通过文件顶部的枚举输入
+  ///        sensor_id: Sensor ID, input through enum at the top of the file
   /// @param x_values 返回的X坐标数组指针,位置的范围是[0.0-1.0]
+  ///        x_values: Returned X coordinate array pointer, position range [0.0-1.0]
   /// @param y_values 返回的Y坐标数组指针,位置的范围是[0.0-1.0]
+  ///        y_values: Returned Y coordinate array pointer, position range [0.0-1.0]
   /// @param io_count 返回的数组长度
+  ///        io_count: Returned array length
   /// @return 0 - 执行成功, 其他 - 参考错误码
+  ///        0 - Success, others - Refer to error codes
   /// @example
   ///           // 1. 获取count大小
+  ///           // 1. Get count size
   ///           int count = 0;
   ///           get_finger_sensor_pos(sensor_id, nullptr, nullptr, &count);
   ///           // 2. 获取实际坐标
+  ///           // 2. Get actual coordinates
   ///           std::vector<float> x(count), y(count);
   ///           get_finger_sensor_pos(sensor_id, x.data(), y.data(), &count);
   int get_finger_sensor_pos(int sensor_id, float* x_values, float* y_values,
                             int* io_count);
 
   /// @brief 获取指定位置的触觉传感器压力值
+  ///        Get tactile sensor pressure value at specified location
   /// @param sensor_id 传感器的id,通过文件顶部的枚举输入
+  ///        sensor_id: Sensor ID, input through enum at the top of the file
   /// @param pressure_list 返回的数组指针,力的范围是[0.0-1.0]
+  ///        pressure_list: Returned array pointer, force range [0.0-1.0]
   /// @param io_count 返回的数组长度
+  ///        io_count: Returned array length
   /// @return 0 - 执行成功, 其他 - 参考错误码
+  ///        0 - Success, others - Refer to error codes
   /// @example
   ///            // 1. 获取count大小
+  ///            // 1. Get count size
   ///            int count = 0;
   ///            lhp_lib->get_finger_pressure(sensor_id, nullptr, &count);
   ///            // 2. 获取实际压力数组
+  ///            // 2. Get actual pressure array
   ///            std::vector<float> pressures(count);
   ///            lhp_lib->get_finger_pressure(sensor_id, pressures.data(),
   ///            &count);
   int get_finger_pressure(int sensor_id, float* pressure_list, int* io_count);
 
   /// @brief 设置基准的触觉传感器当前值,即重置所有传感器当前状态为0状态
+  ///        Set reference tactile sensor current value, i.e., reset all sensor current states to 0 state
   ///       get_finger_pressure返回的传感器差值以这个为基准
+  ///       The sensor difference returned by get_finger_pressure is based on this
   /// @return 0 - 执行成功, 其他 - 参考错误码
+  ///        0 - Success, others - Refer to error codes
   /// @example
   ///           lhp_lib->set_finger_pressure_reset();
   int set_finger_pressure_reset();
 
   /// @brief 获取指定位置的触觉传感器法向力
+  ///        Get tactile sensor normal force at specified location
   /// @param sensor_id 传感器的id,通过文件顶部的枚举输入
+  ///        sensor_id: Sensor ID, input through enum at the top of the file
   /// @param normal_force 返回的法向力,力的范围是[0.0-1.0]
+  ///        normal_force: Returned normal force, force range [0.0-1.0]
   /// @return 0 - 执行成功, 其他 - 参考错误码
+  ///        0 - Success, others - Refer to error codes
   /// @example
   ///           float normal_force;
   ///           lhp_lib->get_finger_normal_force(LSS_FINGER_1_1, &normal_force);
   int get_finger_normal_force(int sensor_id, float* normal_force);
 
   /// @brief 获取指定位置的触觉传感器法向力数组
+  ///        Get tactile sensor normal force array at specified location
   /// @param sensor_id 传感器的id,通过文件顶部的枚举输入
+  ///        sensor_id: Sensor ID, input through enum at the top of the file
   /// @param normal_force_list 返回的法向力数组指针,力的范围是[0.0-1.0]
+  ///        normal_force_list: Returned normal force array pointer, force range [0.0-1.0]
   /// @param io_count 返回的数组长度
+  ///        io_count: Returned array length
   /// @return 0 - 执行成功, 其他 - 参考错误码
+  ///        0 - Success, others - Refer to error codes
   /// @example
   ///           // 1. 获取count大小
+  ///           // 1. Get count size
   ///           int count = 0;
   ///           get_finger_normal_force_ex(sensor_id, nullptr, &count);
   ///           // 2. 获取实际法向力数组
+  ///           // 2. Get actual normal force array
   ///           std::vector<float> normal_force(count);
   ///           get_finger_normal_force_ex(sensor_id, normal_force.data(),
   ///           &count);
@@ -714,9 +1069,13 @@ class LHANDPRO_API LHandProLib {
                                  int* io_count);
 
   /// @brief 获取指定位置的触觉传感器切向力
+  ///        Get tactile sensor tangential force at specified location
   /// @param sensor_id 传感器的id,通过文件顶部的枚举输入
+  ///        sensor_id: Sensor ID, input through enum at the top of the file
   /// @param tangential_force 返回的切向力,力的范围是[0.0-1.0]
+  ///        tangential_force: Returned tangential force, force range [0.0-1.0]
   /// @return 0 - 执行成功, 其他 - 参考错误码
+  ///        0 - Success, others - Refer to error codes
   /// @example
   ///           float tangential_force;
   ///           lhp_lib->get_finger_tangential_force(LSS_FINGER_1_1,
@@ -724,15 +1083,22 @@ class LHANDPRO_API LHandProLib {
   int get_finger_tangential_force(int sensor_id, float* tangential_force);
 
   /// @brief 获取指定位置的触觉传感器切向力数组
+  ///        Get tactile sensor tangential force array at specified location
   /// @param sensor_id 传感器的id,通过文件顶部的枚举输入
+  ///        sensor_id: Sensor ID, input through enum at the top of the file
   /// @param tangential_force_list 返回的切向力数组指针,力的范围是[0.0-1.0]
+  ///        tangential_force_list: Returned tangential force array pointer, force range [0.0-1.0]
   /// @param io_count 返回的数组长度
+  ///        io_count: Returned array length
   /// @return 0 - 执行成功, 其他 - 参考错误码
+  ///        0 - Success, others - Refer to error codes
   /// @example
   ///           // 1. 获取count大小
+  ///           // 1. Get count size
   ///           int count = 0;
   ///           get_finger_tangential_force_ex(sensor_id, nullptr, &count);
   ///           // 2. 获取实际切向力数组
+  ///           // 2. Get actual tangential force array
   ///           std::vector<float> tangential_force(count);
   ///           get_finger_tangential_force_ex(sensor_id,
   ///           tangential_force.data(), &count);
@@ -741,9 +1107,13 @@ class LHANDPRO_API LHandProLib {
                                      int* io_count);
 
   /// @brief 获取指定位置的触觉传感器的受力方向
+  ///        Get tactile sensor force direction at specified location
   /// @param sensor_id 传感器的id,通过文件顶部的枚举输入
+  ///        sensor_id: Sensor ID, input through enum at the top of the file
   /// @param force_direction 返回的受力方向,方向的范围是[0-360]
+  ///        force_direction: Returned force direction, direction range [0-360]
   /// @return 0 - 执行成功, 其他 - 参考错误码
+  ///        0 - Success, others - Refer to error codes
   /// @example
   ///           float force_direction;
   ///           lhp_lib->get_finger_force_direction(LSS_FINGER_1_1,
@@ -751,15 +1121,22 @@ class LHANDPRO_API LHandProLib {
   int get_finger_force_direction(int sensor_id, float* force_direction);
 
   /// @brief 获取指定位置的触觉传感器受力方向数组
+  ///        Get tactile sensor force direction array at specified location
   /// @param sensor_id 传感器的id,通过文件顶部的枚举输入
+  ///        sensor_id: Sensor ID, input through enum at the top of the file
   /// @param force_direction_list 返回的受力方向数组指针,方向的范围是[0-360]
+  ///        force_direction_list: Returned force direction array pointer, direction range [0-360]
   /// @param io_count 返回的数组长度
+  ///        io_count: Returned array length
   /// @return 0 - 执行成功, 其他 - 参考错误码
+  ///        0 - Success, others - Refer to error codes
   /// @example
   ///           // 1. 获取count大小
+  ///           // 1. Get count size
   ///           int count = 0;
   ///           get_finger_force_direction_ex(sensor_id, nullptr, &count);
   ///           // 2. 获取实际受力方向数组
+  ///           // 2. Get actual force direction array
   ///           std::vector<float> force_direction(count);
   ///           get_finger_force_direction_ex(sensor_id, force_direction.data(),
   ///           &count);
@@ -767,86 +1144,123 @@ class LHANDPRO_API LHandProLib {
                                     int* io_count);
 
   /// @brief 获取指定位置的触觉传感器的接近程度
+  ///        Get tactile sensor proximity at specified location
   /// @param sensor_id 传感器的id,通过文件顶部的枚举输入
+  ///        sensor_id: Sensor ID, input through enum at the top of the file
   /// @param proximity 返回的接近程度
+  ///        proximity: Returned proximity
   /// @return 0 - 执行成功, 其他 - 参考错误码
+  ///        0 - Success, others - Refer to error codes
   /// @example
   ///           float proximity;
   ///           lhp_lib->get_finger_proximity(LSS_FINGER_1_1, &proximity);
   int get_finger_proximity(int sensor_id, float* proximity);
 
   /// @brief 获取指定位置的触觉传感器接近程度数组
+  ///        Get tactile sensor proximity array at specified location
   /// @param sensor_id 传感器的id,通过文件顶部的枚举输入
+  ///        sensor_id: Sensor ID, input through enum at the top of the file
   /// @param proximity_list 返回的接近程度数组指针
+  ///        proximity_list: Returned proximity array pointer
   /// @param io_count 返回的数组长度
+  ///        io_count: Returned array length
   /// @return 0 - 执行成功, 其他 - 参考错误码
+  ///        0 - Success, others - Refer to error codes
   /// @example
   ///           // 1. 获取count大小
+  ///           // 1. Get count size
   ///           int count = 0;
   ///           get_finger_proximity_ex(sensor_id, nullptr, &count);
   ///           // 2. 获取实际接近程度数组
+  ///           // 2. Get actual proximity array
   ///           std::vector<float> proximity(count);
   ///           get_finger_proximity_ex(sensor_id, proximity.data(), &count);
   int get_finger_proximity_ex(int sensor_id, float* proximity_list,
                               int* io_count);
 
   /// @brief 开启/关闭日志打印
+  ///        Enable/disable log printing
   /// @param on 是否开启日志打印, true开启, false关闭(默认)
+  ///        on: Whether to enable log printing, true enable, false disable(default)
   /// @param maxsize 最大保存日志数量, 防止内存无限增长
+  ///        maxsize: Maximum number of logs to save, prevent infinite memory growth
   /// @example
   ///           // 开启日志打印，最大保存10000条日志
+  ///           // Enable log printing, maximum 10000 logs saved
   ///           lhp_lib->log_on(true, 10000);
   void log_on(bool on = false, int maxsize = 10000);
 
   /// @brief 设置需要打印的发送数据地址数组
+  ///        Set send data address array to be printed
   /// @param cmd 需要打印的地址数组, 空表示全打印
+  ///        cmd: Address array to be printed, empty means print all
   /// @param count 指令数组长度
+  ///        count: Command array length
   /// @return 0 - 执行成功, 其他 - 参考错误码
+  ///        0 - Success, others - Refer to error codes
   /// @example
   ///           // 设置需要打印的发送数据地址
+  ///           // Set send data address to be printed
   ///           int send_cmds[] = {0x00, 0x01, 0x0B};
   ///           lhp_lib->log_send(send_cmds, 3);
   int log_send(int* cmd, int count);
 
   /// @brief 设置需要打印的接收数据地址数组
+  ///        Set receive data address array to be printed
   /// @param cmd 需要打印的地址数组, 空表示全打印
+  ///        cmd: Address array to be printed, empty means print all
   /// @param count 指令数组长度
+  ///        count: Command array length
   /// @return 0 - 执行成功, 其他 - 参考错误码
+  ///        0 - Success, others - Refer to error codes
   /// @example
   ///           // 设置需要打印的接收数据地址
+  ///           // Set receive data address to be printed
   ///           int recv_cmds[] = {0x00, 0x40};
   ///           lhp_lib->log_recv(recv_cmds, 2);
   int log_recv(int* cmd, int count);
 
   /// @brief 清空日志地址数组
+  ///        Clear log address array
   /// @param send 是否清空发送日志地址数组
+  ///        send: Whether to clear send log address array
   /// @param recv 是否清空接收日志地址数组
+  ///        recv: Whether to clear receive log address array
   /// @example
   ///           // 清空发送和接收日志地址数组
+  ///           // Clear send and receive log address arrays
   ///           lhp_lib->log_reset();
   ///           // 仅清空发送日志地址数组
+  ///           // Only clear send log address array
   ///           lhp_lib->log_reset(true, false);
   void log_reset(bool send = true, bool recv = true);
 
   /// @brief 将日志保存在文件中
+  ///        Save log to file
   /// @param file_name - 文件地址
+  ///        file_name - File address
   /// @return 0 - 执行成功, 其他 - 参考错误码
+  ///        0 - Success, others - Refer to error codes
   /// @example
   ///           lhp_lib->log_save("hand_log.txt");
   int log_save(const char* file_name);
 
   /// @brief 清空当前日志记录
+  ///        Clear current log records
   /// @example
   ///           lhp_lib->log_clear();
   void log_clear();
 
   /// @brief 日志回调函数
+  ///        Log callback function
   /// @example
   ///           // 定义日志回调函数
+  ///           // Define log callback function
   ///           void log_callback(const char* log) {
   ///               std::cout << log << std::endl;
   ///           }
   ///           // 设置日志回调
+  ///           // Set log callback
   ///           lhp_lib->set_log_callback(log_callback);
   void set_log_callback(LogAddCallback callback);
 };
