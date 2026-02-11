@@ -28,7 +28,7 @@ setup(
     zip_safe=True,
     maintainer='sorrowfeng',
     maintainer_email='1399600304@qq.com',
-    description='DH116S model description project',
+    description='Model description project',
     license='Apache-2.0',
     tests_require=['pytest'],
     entry_points={

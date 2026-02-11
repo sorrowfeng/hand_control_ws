@@ -99,8 +99,8 @@
 
 在 `src/lhandpro_service/src/hand_control_service.hpp` 文件中修改 `HAND_TYPE` 宏：
 
-- `#define HAND_TYPE lhplib::LAC_DOF_6` - DH116灵巧手
-- `#define HAND_TYPE lhplib::LAC_DOF_6_S` - DH116S灵巧手
+- `#define HAND_TYPE lhplib::LAC_DOF_6`
+- `#define HAND_TYPE lhplib::LAC_DOF_6_S` 
 
 
 

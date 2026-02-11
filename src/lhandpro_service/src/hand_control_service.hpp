@@ -52,11 +52,11 @@
 // 通讯方式选择宏
 // 0: 使用EtherCAT通讯
 // 1: 使用CANFD通讯
-#define COMMUNICATION_MODE 1
+#define COMMUNICATION_MODE 0
 
 // 灵巧手型号选择宏
-// lhplib::LAC_DOF_6: DH116灵巧手
-// lhplib::LAC_DOF_6_S: DH116S灵巧手
+// lhplib::LAC_DOF_6
+// lhplib::LAC_DOF_6_S
 #define HAND_TYPE lhplib::LAC_DOF_6
 
 // 服务注册宏
@@ -73,8 +73,8 @@ class HandControlService : public rclcpp::Node {
   HandControlService();
   ~HandControlService();
 
-  void init_ethercat(int channel = 0);
-  void init_canfd(int channel = 0);
+  bool init_ethercat(int channel = 0);
+  bool init_canfd(int channel = 0);
   void cleanup_resources();
   void init_config();
   void init_service();
@@ -177,7 +177,9 @@ class HandControlService : public rclcpp::Node {
   std::shared_ptr<lhplib::LHandProLib> lhp_lib_;
   std::shared_ptr<EthercatMaster> ec_master_;
   std::shared_ptr<CANFDMaster> canfd_master_;
-  std::function<bool(const unsigned char*, unsigned int)> send_function_;
+  std::function<bool(const unsigned char*, unsigned int)> ecat_send_function_;
+  std::function<bool(unsigned int, const unsigned char*, unsigned int)>
+      canfd_send_function_;
   int active_dof_{0};
   rclcpp::TimerBase::SharedPtr reconnect_timer_;
   std::atomic<bool> is_connected_;

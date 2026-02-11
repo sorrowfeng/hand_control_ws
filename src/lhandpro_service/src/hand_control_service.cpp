@@ -42,14 +42,14 @@ HandControlService::~HandControlService() {
   }
 }
 
-void HandControlService::init_ethercat(int channel) {
+bool HandControlService::init_ethercat(int channel) {
   cleanup_resources();
 
   int target = channel;
   auto channels = ec_master_->scanNetworkInterfaces();
   if (channels.size() == 0) {
     RCLCPP_ERROR(this->get_logger(), "没有端口");
-    return;
+    return false;
   }
 
   for (size_t i = 0; i < channels.size(); ++i)
@@ -62,12 +62,12 @@ void HandControlService::init_ethercat(int channel) {
   // 初始化
   if (ec_master_->init(channel) == false) {
     RCLCPP_ERROR(this->get_logger(), "连接失败");
-    return;
+    return false;
   }
   // 启动到OP
   if (!ec_master_->start()) {
     RCLCPP_ERROR(this->get_logger(), "OP失败");
-    return;
+    return false;
   }
   // 启动后台通信（非阻塞）
   ec_master_->run();
@@ -78,10 +78,10 @@ void HandControlService::init_ethercat(int channel) {
     return ec_master_->setOutputs(data, size);
   };
   // 使用std::function包装
-  send_function_ = send_func;
+  ecat_send_function_ = send_func;
 
   // 设置回调
-  lhp_lib_->set_send_rpdo_callback_ex(&send_function_);
+  lhp_lib_->set_send_rpdo_callback_ex(&ecat_send_function_);
 
   // 等待一会儿, 再初始化
   std::this_thread::sleep_for(std::chrono::milliseconds(200));
@@ -92,16 +92,17 @@ void HandControlService::init_ethercat(int channel) {
 
   is_connected_ = true;
   current_channel_ = target;
+  return true;
 }
 
-void HandControlService::init_canfd(int channel) {
+bool HandControlService::init_canfd(int channel) {
   cleanup_resources();
 
   int target = channel;
   std::vector<std::string> names = canfd_master_->scanDevices();
   if (names.size() == 0) {
     RCLCPP_ERROR(this->get_logger(), "未找到CANFD通道");
-    return;
+    return false;
   }
 
   for (size_t i = 0; i < names.size(); ++i) {
@@ -111,7 +112,7 @@ void HandControlService::init_canfd(int channel) {
 
   if (target < 0 || target >= static_cast<int>(names.size())) {
     RCLCPP_ERROR(this->get_logger(), "无效的通道索引: %d", target);
-    return;
+    return false;
   }
 
   RCLCPP_INFO(this->get_logger(), "正在连接:%d --- %s", target,
@@ -120,37 +121,38 @@ void HandControlService::init_canfd(int channel) {
   // 连接, 仲裁段波特率 1000kbps, 数据段波特率 5000kbps
   if (!canfd_master_->connect(target, 1000, 5000)) {
     RCLCPP_ERROR(this->get_logger(), "连接失败");
-    return;
+    return false;
   }
 
   /****** LHandProLib的初始化 ******/
   // CANFD的发送函数
-  auto send_func = [this](const unsigned char* data, unsigned int size) {
-    // 发送, COB-ID : 0x500 + nodeID
-    return canfd_master_->sendData(0x500 + 1, data, size);
+  auto send_func = [this](unsigned int id, const unsigned char* data,
+                          unsigned int size) {
+    return canfd_master_->sendData(id, data, size);
   };
   // 使用std::function包装
-  send_function_ = send_func;
+  canfd_send_function_ = send_func;
 
   // 处理CANFD发送数据的回调
-  lhp_lib_->set_send_canfd_callback_ex(&send_function_);
+  lhp_lib_->set_send_canfd_callback_ex(&canfd_send_function_);
 
   // 设置接收回调函数, 刷新解析数据
-  canfd_master_->setReceiveCallback([this](uint32_t /*id*/,
+  canfd_master_->setReceiveCallback([this](uint32_t id,
                                            const std::vector<uint8_t>& data,
-                                           uint64_t /*timestamp*/) {
-    lhp_lib_->set_canfd_data_decode(data.data(), data.size());
+                                           uint64_t timestamp) {
+    lhp_lib_->set_canfd_data_decode(id, data.data(), data.size());
   });
 
   // 初始化LHandProLib库
   if (lhp_lib_->initial(lhplib::LCN_CANFD) != lhplib::LER_NONE) {
     RCLCPP_ERROR(this->get_logger(), "LHandProLib 初始化失败！");
-    return;
+    return false;
   }
 
   // CANFD数据通过回调函数处理，无需监控线程
   is_connected_ = true;
   current_channel_ = target;
+  return true;
 }
 
 void HandControlService::cleanup_resources() {
@@ -198,6 +200,7 @@ void HandControlService::check_and_reconnect() {
 }
 
 void HandControlService::init_config() {
+  if (!is_connected_) return;
   int total = 0, active = 0;
   lhp_lib_->get_dof(&total, &active);
   RCLCPP_INFO(this->get_logger(), "连接成功，总自由度: %d，主动自由度: %d",
@@ -268,6 +271,7 @@ void HandControlService::stop_monitor() {
 }
 
 void HandControlService::init_service() {
+  if (!is_connected_) return;
   // 使用宏注册所有服务
   set_enable_srv_ =
       REGISTER_SERVICE(SetEnable, SRV_NAME_SET_ENABLE, set_enable_callback);
