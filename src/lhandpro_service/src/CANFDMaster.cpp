@@ -318,16 +318,47 @@ bool CANFDMaster::loadLibCanBus() {
     return true;
   }
 
-  libusb_handle_ =
-      dlopen("/usr/local/lib/libusb-1.0.so", RTLD_NOW | RTLD_GLOBAL);
+  auto open_first = [](const std::vector<std::string>& candidates, int flags,
+                       std::string* opened_path) -> void* {
+    for (const auto& path : candidates) {
+      if (path.empty()) continue;
+      void* handle = dlopen(path.c_str(), flags);
+      if (handle) {
+        if (opened_path) *opened_path = path;
+        return handle;
+      }
+    }
+    return nullptr;
+  };
+
+  std::vector<std::string> libusb_candidates;
+  if (const char* path = std::getenv("LHANDPRO_LIBUSB_PATH")) {
+    libusb_candidates.emplace_back(path);
+  }
+  libusb_candidates.emplace_back("libusb-1.0.so");
+  libusb_candidates.emplace_back("/usr/local/lib/libusb-1.0.so");
+  libusb_candidates.emplace_back("/usr/lib/x86_64-linux-gnu/libusb-1.0.so");
+
+  std::string libusb_path;
+  libusb_handle_ = open_first(libusb_candidates, RTLD_NOW | RTLD_GLOBAL,
+                              &libusb_path);
   if (!libusb_handle_) {
-    std::cerr << "Failed to load libusb-1.0.so: " << dlerror() << std::endl;
+    std::cerr << "Failed to load libusb-1.0.so" << std::endl;
     return false;
   }
 
-  libcan_handle_ = dlopen("/usr/local/lib/libcanbus.so", RTLD_NOW);
+  std::vector<std::string> libcanbus_candidates;
+  if (const char* path = std::getenv("LHANDPRO_LIBCANBUS_PATH")) {
+    libcanbus_candidates.emplace_back(path);
+  }
+  libcanbus_candidates.emplace_back("libcanbus.so");
+  libcanbus_candidates.emplace_back("/usr/local/lib/libcanbus.so");
+
+  std::string libcanbus_path;
+  libcan_handle_ =
+      open_first(libcanbus_candidates, RTLD_NOW, &libcanbus_path);
   if (!libcan_handle_) {
-    std::cerr << "Failed to load libcanbus.so: " << dlerror() << std::endl;
+    std::cerr << "Failed to load libcanbus.so" << std::endl;
     dlclose(libusb_handle_);
     libusb_handle_ = nullptr;
     return false;
