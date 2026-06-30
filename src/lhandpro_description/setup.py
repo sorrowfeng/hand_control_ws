@@ -1,7 +1,29 @@
+from pathlib import Path
+
 from setuptools import find_packages, setup
-from glob import glob
 
 package_name = 'lhandpro_description'
+
+
+def collect_data_files(*directories):
+    data_files = []
+
+    for directory in directories:
+        root = Path(directory)
+        if not root.exists():
+            continue
+
+        files_by_parent = {}
+        for path in root.rglob('*'):
+            if path.is_file():
+                files_by_parent.setdefault(path.parent, []).append(str(path))
+
+        for parent, files in files_by_parent.items():
+            install_dir = Path('share') / package_name / parent
+            data_files.append((install_dir.as_posix(), files))
+
+    return data_files
+
 
 setup(
     name=package_name,
@@ -11,19 +33,7 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-
-        # 添加 config 文件夹下的所有文件
-        ('share/' + package_name + '/config', glob('config/*')),
-
-        # 添加 launch 文件夹下的所有 launch 文件
-        ('share/' + package_name + '/launch', glob('launch/*.launch.py')),
-
-        # 添加 meshes 文件夹下的所有文件（如 STL、OBJ 等）
-        ('share/' + package_name + '/meshes', glob('meshes/*')),
-
-        # 添加 urdf 文件夹下的所有文件（如 .urdf 或 .xacro 文件）
-        ('share/' + package_name + '/urdf', glob('urdf/*')),
-    ],
+    ] + collect_data_files('config', 'launch', 'meshes', 'urdf', 'models'),
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='sorrowfeng',

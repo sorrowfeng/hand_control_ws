@@ -1,0 +1,4 @@
+# Change active_model to switch the default robot description.
+# If urdf_file is empty, launch resolves urdf/<active_model>.urdf first.
+active_model: DH116S-L000-A1
+urdf_file:
