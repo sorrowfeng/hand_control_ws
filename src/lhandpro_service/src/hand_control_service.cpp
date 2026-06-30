@@ -1,673 +1,1434 @@
 #include "hand_control_service.hpp"
 
+#include <LHandProLib/LHandProLib.hpp>
+
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cctype>
+#include <cstdint>
 #include <functional>
+#include <memory>
+#include <mutex>
+#include <set>
+#include <stdexcept>
+#include <string>
+#include <thread>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "CANFDMaster.h"
 #include "EthercatMaster.h"
+#include "RS485Master.h"
+
+#include "lhandpro_interfaces/srv/control_motors.hpp"
+#include "lhandpro_interfaces/srv/get_angle.hpp"
+#include "lhandpro_interfaces/srv/get_angular_velocity.hpp"
+#include "lhandpro_interfaces/srv/get_can_node_id.hpp"
+#include "lhandpro_interfaces/srv/get_canfd_arb_baudrate.hpp"
+#include "lhandpro_interfaces/srv/get_canfd_data_baudrate.hpp"
+#include "lhandpro_interfaces/srv/get_control_mode.hpp"
+#include "lhandpro_interfaces/srv/get_enable.hpp"
+#include "lhandpro_interfaces/srv/get_firmware_version.hpp"
+#include "lhandpro_interfaces/srv/get_home_current.hpp"
+#include "lhandpro_interfaces/srv/get_max_current.hpp"
+#include "lhandpro_interfaces/srv/get_now_alarm.hpp"
+#include "lhandpro_interfaces/srv/get_now_angle.hpp"
+#include "lhandpro_interfaces/srv/get_now_angular_velocity.hpp"
+#include "lhandpro_interfaces/srv/get_now_current.hpp"
+#include "lhandpro_interfaces/srv/get_now_position.hpp"
+#include "lhandpro_interfaces/srv/get_now_position_velocity.hpp"
+#include "lhandpro_interfaces/srv/get_now_status.hpp"
+#include "lhandpro_interfaces/srv/get_position.hpp"
+#include "lhandpro_interfaces/srv/get_position_reached.hpp"
+#include "lhandpro_interfaces/srv/get_position_velocity.hpp"
+#include "lhandpro_interfaces/srv/get_rs485_baudrate.hpp"
+#include "lhandpro_interfaces/srv/get_rs485_node_id.hpp"
+#include "lhandpro_interfaces/srv/get_safe_current_enable.hpp"
+#include "lhandpro_interfaces/srv/get_serial_number.hpp"
+#include "lhandpro_interfaces/srv/get_torque_reached.hpp"
+#include "lhandpro_interfaces/srv/home_motors.hpp"
+#include "lhandpro_interfaces/srv/move_motors.hpp"
+#include "lhandpro_interfaces/srv/play_gesture.hpp"
+#include "lhandpro_interfaces/srv/set_angle.hpp"
+#include "lhandpro_interfaces/srv/set_angular_velocity.hpp"
+#include "lhandpro_interfaces/srv/set_can_node_id.hpp"
+#include "lhandpro_interfaces/srv/set_canfd_arb_baudrate.hpp"
+#include "lhandpro_interfaces/srv/set_canfd_data_baudrate.hpp"
+#include "lhandpro_interfaces/srv/set_clear_alarm.hpp"
+#include "lhandpro_interfaces/srv/set_control_mode.hpp"
+#include "lhandpro_interfaces/srv/set_enable.hpp"
+#include "lhandpro_interfaces/srv/set_home_current.hpp"
+#include "lhandpro_interfaces/srv/set_max_current.hpp"
+#include "lhandpro_interfaces/srv/set_move_no_home.hpp"
+#include "lhandpro_interfaces/srv/set_position.hpp"
+#include "lhandpro_interfaces/srv/set_position_velocity.hpp"
+#include "lhandpro_interfaces/srv/set_rs485_baudrate.hpp"
+#include "lhandpro_interfaces/srv/set_rs485_node_id.hpp"
+#include "lhandpro_interfaces/srv/set_safe_current_enable.hpp"
+#include "lhandpro_interfaces/srv/stop_motors.hpp"
+
+#ifndef COMMUNICATION_MODE
+#define COMMUNICATION_MODE 1
+#endif
+#ifndef CANFD_NODE_ID
+#define CANFD_NODE_ID 1
+#endif
+#ifndef CANFD_ARB_BAUDRATE
+#define CANFD_ARB_BAUDRATE 1000000
+#endif
+#ifndef CANFD_DATA_BAUDRATE
+#define CANFD_DATA_BAUDRATE 5000000
+#endif
+#ifndef RS485_NODE_ID
+#define RS485_NODE_ID 1
+#endif
+#ifndef RS485_BAUDRATE
+#define RS485_BAUDRATE 500000
+#endif
+#ifndef HAND_TYPE
+#define HAND_TYPE lhplib::LAC_DOF_6
+#endif
+
+namespace {
+
+constexpr const char* SRV_NAME_SET_ENABLE = "set_enable";
+constexpr const char* SRV_NAME_GET_ENABLE = "get_enable";
+constexpr const char* SRV_NAME_GET_NOW_ALARM = "get_now_alarm";
+constexpr const char* SRV_NAME_SET_CLEAR_ALARM = "set_clear_alarm";
+constexpr const char* SRV_NAME_SET_ANGLE = "set_angle";
+constexpr const char* SRV_NAME_GET_ANGLE = "get_angle";
+constexpr const char* SRV_NAME_SET_POSITION = "set_position";
+constexpr const char* SRV_NAME_GET_POSITION = "get_position";
+constexpr const char* SRV_NAME_SET_ANGULAR_VELOCITY =
+    "set_angular_velocity";
+constexpr const char* SRV_NAME_GET_ANGULAR_VELOCITY =
+    "get_angular_velocity";
+constexpr const char* SRV_NAME_GET_NOW_ANGLE = "get_now_angle";
+constexpr const char* SRV_NAME_GET_NOW_ANGULAR_VELOCITY =
+    "get_now_angular_velocity";
+constexpr const char* SRV_NAME_GET_NOW_POSITION = "get_now_position";
+constexpr const char* SRV_NAME_GET_NOW_POSITION_VELOCITY =
+    "get_now_position_velocity";
+constexpr const char* SRV_NAME_GET_NOW_CURRENT = "get_now_current";
+constexpr const char* SRV_NAME_GET_NOW_STATUS = "get_now_status";
+constexpr const char* SRV_NAME_GET_POSITION_VELOCITY =
+    "get_position_velocity";
+constexpr const char* SRV_NAME_SET_POSITION_VELOCITY =
+    "set_position_velocity";
+constexpr const char* SRV_NAME_GET_MAX_CURRENT = "get_max_current";
+constexpr const char* SRV_NAME_SET_MAX_CURRENT = "set_max_current";
+constexpr const char* SRV_NAME_GET_CONTROL_MODE = "get_control_mode";
+constexpr const char* SRV_NAME_SET_CONTROL_MODE = "set_control_mode";
+constexpr const char* SRV_NAME_GET_POSITION_REACHED =
+    "get_position_reached";
+constexpr const char* SRV_NAME_GET_TORQUE_REACHED = "get_torque_reached";
+constexpr const char* SRV_NAME_SET_MOVE_NO_HOME = "set_move_no_home";
+constexpr const char* SRV_NAME_GET_FIRMWARE_VERSION =
+    "get_firmware_version";
+constexpr const char* SRV_NAME_GET_SERIAL_NUMBER = "get_serial_number";
+constexpr const char* SRV_NAME_SET_SAFE_CURRENT_ENABLE =
+    "set_safe_current_enable";
+constexpr const char* SRV_NAME_GET_SAFE_CURRENT_ENABLE =
+    "get_safe_current_enable";
+constexpr const char* SRV_NAME_SET_HOME_CURRENT = "set_home_current";
+constexpr const char* SRV_NAME_GET_HOME_CURRENT = "get_home_current";
+constexpr const char* SRV_NAME_SET_CAN_NODE_ID = "set_can_node_id";
+constexpr const char* SRV_NAME_GET_CAN_NODE_ID = "get_can_node_id";
+constexpr const char* SRV_NAME_SET_CANFD_ARB_BAUDRATE =
+    "set_canfd_arb_baudrate";
+constexpr const char* SRV_NAME_GET_CANFD_ARB_BAUDRATE =
+    "get_canfd_arb_baudrate";
+constexpr const char* SRV_NAME_SET_CANFD_DATA_BAUDRATE =
+    "set_canfd_data_baudrate";
+constexpr const char* SRV_NAME_GET_CANFD_DATA_BAUDRATE =
+    "get_canfd_data_baudrate";
+constexpr const char* SRV_NAME_SET_RS485_NODE_ID = "set_rs485_node_id";
+constexpr const char* SRV_NAME_GET_RS485_NODE_ID = "get_rs485_node_id";
+constexpr const char* SRV_NAME_SET_RS485_BAUDRATE = "set_rs485_baudrate";
+constexpr const char* SRV_NAME_GET_RS485_BAUDRATE = "get_rs485_baudrate";
+constexpr const char* SRV_NAME_HOME_MOTORS = "home_motors";
+constexpr const char* SRV_NAME_MOVE_MOTORS = "move_motors";
+constexpr const char* SRV_NAME_STOP_MOTORS = "stop_motors";
+constexpr const char* SRV_NAME_PLAY_GESTURE = "play_gesture";
+constexpr const char* SRV_NAME_CONTROL_MOTORS = "control_motors";
+
+std::string toLower(std::string value) {
+  std::transform(value.begin(), value.end(), value.begin(), [](char c) {
+    return static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  });
+  return value;
+}
+
+enum class BusType { Ethercat, Canfd, Rs485 };
+
+std::string busTypeName(BusType type) {
+  switch (type) {
+    case BusType::Ethercat:
+      return "ethercat";
+    case BusType::Canfd:
+      return "canfd";
+    case BusType::Rs485:
+      return "rs485";
+  }
+  return "unknown";
+}
+
+BusType parseBusType(const std::string& value) {
+  const std::string type = toLower(value);
+  if (type == "ethercat" || type == "ecat") return BusType::Ethercat;
+  if (type == "canfd") return BusType::Canfd;
+  if (type == "rs485") return BusType::Rs485;
+  throw std::runtime_error("Unsupported bus type: " + value);
+}
+
+std::string defaultBusType() {
+#if COMMUNICATION_MODE == 1
+  return "canfd";
+#elif COMMUNICATION_MODE == 2
+  return "rs485";
+#else
+  return "ethercat";
+#endif
+}
+
+int defaultAddressForType(BusType type) {
+  switch (type) {
+    case BusType::Canfd:
+      return CANFD_NODE_ID;
+    case BusType::Rs485:
+      return RS485_NODE_ID;
+    case BusType::Ethercat:
+      return 1;
+  }
+  return 1;
+}
+
+int parseHandType(const std::string& value) {
+  const std::string type = toLower(value);
+  if (type == "lac_dof_6" || type == "dof_6" || type == "dh116") {
+    return lhplib::LAC_DOF_6;
+  }
+  if (type == "lac_dof_6_s" || type == "dof_6_s" || type == "dh116s") {
+    return lhplib::LAC_DOF_6_S;
+  }
+  if (type == "lac_dof_16" || type == "dof_16" || type == "dh2116") {
+    return lhplib::LAC_DOF_16;
+  }
+  try {
+    return std::stoi(value);
+  } catch (...) {
+    return HAND_TYPE;
+  }
+}
+
+struct BusConfig {
+  std::string name;
+  BusType type{BusType::Canfd};
+  int channel{0};
+  int canfd_arb_baudrate{CANFD_ARB_BAUDRATE};
+  int canfd_data_baudrate{CANFD_DATA_BAUDRATE};
+  int rs485_baudrate{RS485_BAUDRATE};
+};
+
+struct HandConfig {
+  std::string name;
+  std::string bus_name;
+  int address{1};
+  int hand_type{HAND_TYPE};
+};
+
+class BusBase;
+
+class HandDevice {
+ public:
+  explicit HandDevice(HandConfig config)
+      : name_(std::move(config.name)),
+        bus_name_(std::move(config.bus_name)),
+        address_(config.address),
+        hand_type_(config.hand_type),
+        sdk_(std::make_shared<lhplib::LHandProLib>()) {}
+
+  ~HandDevice() { close(); }
+
+  const std::string& name() const { return name_; }
+  const std::string& busName() const { return bus_name_; }
+  int address() const { return address_; }
+  int handType() const { return hand_type_; }
+  int activeDof() const { return active_dof_; }
+  BusType busType() const { return bus_type_; }
+  std::shared_ptr<lhplib::LHandProLib> sdk() const { return sdk_; }
+  std::mutex& sdkMutex() { return sdk_mutex_; }
+
+  void setBus(const std::shared_ptr<BusBase>& bus, BusType type) {
+    bus_ = bus;
+    bus_type_ = type;
+  }
+
+  void setAddress(int address) { address_ = address; }
+
+  void setCanfdSendFunction(
+      std::function<bool(unsigned int, const unsigned char*, unsigned int, int)>
+          func) {
+    canfd_send_function_ = std::move(func);
+    sdk_->set_send_canfd_callback_ex(&canfd_send_function_);
+  }
+
+  void setRs485SendFunction(
+      std::function<bool(const unsigned char*, unsigned int)> func) {
+    rs485_send_function_ = std::move(func);
+    sdk_->set_send_rs485_callback_ex(&rs485_send_function_);
+  }
+
+  void setEthercatSendFunction(
+      std::function<bool(const unsigned char*, unsigned int)> func) {
+    ethercat_send_function_ = std::move(func);
+    sdk_->set_send_rpdo_callback_ex(&ethercat_send_function_);
+  }
+
+  bool initialize(BusType type, rclcpp::Logger logger) {
+    std::lock_guard<std::mutex> lock(sdk_mutex_);
+    sdk_->set_hand_type(hand_type_);
+
+    int result = lhplib::LER_NONE;
+    if (type == BusType::Ethercat) {
+      result = sdk_->initial(lhplib::LCN_ECAT);
+    } else if (type == BusType::Canfd) {
+      result = sdk_->initial(lhplib::LCN_CANFD,
+                             static_cast<unsigned int>(address_));
+    } else {
+      result = sdk_->initial(lhplib::LCN_RS485,
+                             static_cast<unsigned int>(address_));
+    }
+
+    if (result != lhplib::LER_NONE) {
+      RCLCPP_ERROR(logger, "[%s] LHandProLib 初始化失败: %d", name_.c_str(),
+                   result);
+      initialized_ = false;
+      return false;
+    }
+
+    int total = 0;
+    int active = 0;
+    sdk_->get_dof(&total, &active);
+    active_dof_ = active;
+    initialized_ = true;
+    RCLCPP_INFO(logger, "[%s] 初始化完成 bus=%s address=%d dof=%d/%d",
+                name_.c_str(), bus_name_.c_str(), address_, active, total);
+    return true;
+  }
+
+  void decodeCanfd(uint32_t id, const uint8_t* data, int size) {
+    if (!initialized_ || !data || size <= 0) return;
+    sdk_->set_canfd_data_decode(id, data, size);
+  }
+
+  void decodeRs485(const uint8_t* data, int size) {
+    if (!initialized_ || !data || size <= 0) return;
+    sdk_->set_rs485_data_decode(data, size);
+  }
+
+  void decodeEthercat(const uint8_t* data, int size) {
+    if (!initialized_ || !data || size <= 0) return;
+    sdk_->set_tpdo_data_decode(data, size);
+  }
+
+  void close() {
+    if (!sdk_) return;
+    std::lock_guard<std::mutex> lock(sdk_mutex_);
+    sdk_->close();
+    initialized_ = false;
+  }
+
+  bool isInitialized() const { return initialized_; }
+
+  bool isBusAlive() const;
+
+ private:
+  std::string name_;
+  std::string bus_name_;
+  int address_;
+  int hand_type_;
+  int active_dof_{0};
+  BusType bus_type_{BusType::Canfd};
+  std::shared_ptr<lhplib::LHandProLib> sdk_;
+  std::weak_ptr<BusBase> bus_;
+  std::atomic<bool> initialized_{false};
+  std::mutex sdk_mutex_;
+  std::function<bool(unsigned int, const unsigned char*, unsigned int, int)>
+      canfd_send_function_;
+  std::function<bool(const unsigned char*, unsigned int)> rs485_send_function_;
+  std::function<bool(const unsigned char*, unsigned int)>
+      ethercat_send_function_;
+};
+
+class BusBase : public std::enable_shared_from_this<BusBase> {
+ public:
+  explicit BusBase(BusConfig config) : config_(std::move(config)) {}
+  virtual ~BusBase() = default;
+
+  const std::string& name() const { return config_.name; }
+  BusType type() const { return config_.type; }
+
+  virtual bool start(rclcpp::Logger logger) = 0;
+  virtual void stop() = 0;
+  virtual bool isAlive() const = 0;
+  virtual bool attachHand(const std::shared_ptr<HandDevice>& hand,
+                          rclcpp::Logger logger) = 0;
+
+  bool restart(rclcpp::Logger logger) {
+    stop();
+    const bool ok = start(logger);
+    if (!ok) {
+      RCLCPP_ERROR(logger, "[%s] 总线重连失败", name().c_str());
+    }
+    return ok;
+  }
+
+ protected:
+  std::vector<std::shared_ptr<HandDevice>> attachedHands() const {
+    std::lock_guard<std::mutex> lock(hands_mutex_);
+    return hands_;
+  }
+
+  void addHand(const std::shared_ptr<HandDevice>& hand) {
+    std::lock_guard<std::mutex> lock(hands_mutex_);
+    hands_.push_back(hand);
+  }
+
+  BusConfig config_;
+  mutable std::mutex hands_mutex_;
+  std::vector<std::shared_ptr<HandDevice>> hands_;
+};
+
+bool HandDevice::isBusAlive() const {
+  auto bus = bus_.lock();
+  return bus && bus->isAlive();
+}
+
+class CanfdBus : public BusBase {
+ public:
+  explicit CanfdBus(BusConfig config) : BusBase(std::move(config)) {}
+  ~CanfdBus() override { stop(); }
+
+  bool start(rclcpp::Logger logger) override {
+    if (master_ && master_->isConnected()) return true;
+
+    master_ = std::make_shared<CANFDMaster>();
+    auto devices = master_->scanDevices();
+    if (devices.empty()) {
+      RCLCPP_ERROR(logger, "[%s] 未找到 CANFD 通道", name().c_str());
+      return false;
+    }
+    if (config_.channel < 0 ||
+        config_.channel >= static_cast<int>(devices.size())) {
+      RCLCPP_ERROR(logger, "[%s] CANFD 通道索引无效: %d", name().c_str(),
+                   config_.channel);
+      return false;
+    }
+
+    if (!master_->connect(config_.channel, config_.canfd_arb_baudrate,
+                          config_.canfd_data_baudrate)) {
+      RCLCPP_ERROR(logger, "[%s] CANFD 连接失败", name().c_str());
+      return false;
+    }
+
+    master_->setReceiveCallback(
+        [this](uint32_t id, const std::vector<uint8_t>& data,
+               uint64_t /*timestamp*/) {
+          for (const auto& hand : attachedHands()) {
+            hand->decodeCanfd(id, data.data(), static_cast<int>(data.size()));
+          }
+        });
+
+    RCLCPP_INFO(logger, "[%s] CANFD 已连接: channel=%d arb=%d data=%d",
+                name().c_str(), config_.channel, config_.canfd_arb_baudrate,
+                config_.canfd_data_baudrate);
+    return true;
+  }
+
+  void stop() override {
+    if (master_) {
+      master_->disconnect();
+    }
+  }
+
+  bool isAlive() const override {
+    return master_ && master_->isConnected();
+  }
+
+  bool attachHand(const std::shared_ptr<HandDevice>& hand,
+                  rclcpp::Logger logger) override {
+    if (!isAlive()) return false;
+    hand->setBus(shared_from_this(), type());
+    hand->setCanfdSendFunction(
+        [this](unsigned int id, const unsigned char* data, unsigned int size,
+               int externflag) {
+          std::lock_guard<std::mutex> lock(send_mutex_);
+          return master_ && master_->sendData(id, data, size, externflag);
+        });
+    addHand(hand);
+    return hand->initialize(type(), logger);
+  }
+
+ private:
+  std::shared_ptr<CANFDMaster> master_;
+  std::mutex send_mutex_;
+};
+
+class Rs485Bus : public BusBase {
+ public:
+  explicit Rs485Bus(BusConfig config) : BusBase(std::move(config)) {}
+  ~Rs485Bus() override { stop(); }
+
+  bool start(rclcpp::Logger logger) override {
+    if (master_ && master_->isConnected()) return true;
+
+    master_ = std::make_shared<RS485Master>();
+    auto devices = master_->scanDevices();
+    if (devices.empty()) {
+      RCLCPP_ERROR(logger, "[%s] 未找到 RS485 串口", name().c_str());
+      return false;
+    }
+    if (config_.channel < 0 ||
+        config_.channel >= static_cast<int>(devices.size())) {
+      RCLCPP_ERROR(logger, "[%s] RS485 串口索引无效: %d", name().c_str(),
+                   config_.channel);
+      return false;
+    }
+
+    if (!master_->connect(config_.channel, config_.rs485_baudrate)) {
+      RCLCPP_ERROR(logger, "[%s] RS485 连接失败", name().c_str());
+      return false;
+    }
+
+    master_->setReceiveCallback([this](const uint8_t* data, size_t size) {
+      for (const auto& hand : attachedHands()) {
+        hand->decodeRs485(data, static_cast<int>(size));
+      }
+    });
+
+    RCLCPP_INFO(logger, "[%s] RS485 已连接: channel=%d baudrate=%d",
+                name().c_str(), config_.channel, config_.rs485_baudrate);
+    return true;
+  }
+
+  void stop() override {
+    if (master_) {
+      master_->disconnect();
+    }
+  }
+
+  bool isAlive() const override {
+    return master_ && master_->isConnected();
+  }
+
+  bool attachHand(const std::shared_ptr<HandDevice>& hand,
+                  rclcpp::Logger logger) override {
+    if (!isAlive()) return false;
+    hand->setBus(shared_from_this(), type());
+    hand->setRs485SendFunction(
+        [this](const unsigned char* data, unsigned int size) {
+          std::lock_guard<std::mutex> lock(send_mutex_);
+          return master_ && master_->sendData(data, size);
+        });
+    addHand(hand);
+    return hand->initialize(type(), logger);
+  }
+
+ private:
+  std::shared_ptr<RS485Master> master_;
+  std::mutex send_mutex_;
+};
+
+class EthercatBus : public BusBase {
+ public:
+  explicit EthercatBus(BusConfig config) : BusBase(std::move(config)) {}
+  ~EthercatBus() override { stop(); }
+
+  bool start(rclcpp::Logger logger) override {
+    if (master_ &&
+        master_->getState() == EthercatMaster::EthercatState::Operational) {
+      ensureMonitorRunning();
+      return true;
+    }
+
+    master_ = std::make_shared<EthercatMaster>();
+    auto devices = master_->scanNetworkInterfaces();
+    if (devices.empty()) {
+      RCLCPP_ERROR(logger, "[%s] 未找到 EtherCAT 网口", name().c_str());
+      return false;
+    }
+    if (config_.channel < 0 ||
+        config_.channel >= static_cast<int>(devices.size())) {
+      RCLCPP_ERROR(logger, "[%s] EtherCAT 网口索引无效: %d", name().c_str(),
+                   config_.channel);
+      return false;
+    }
+    if (!master_->init(config_.channel) || !master_->start()) {
+      RCLCPP_ERROR(logger, "[%s] EtherCAT 启动失败", name().c_str());
+      return false;
+    }
+    master_->run();
+    ensureMonitorRunning();
+    RCLCPP_INFO(logger, "[%s] EtherCAT 已连接: channel=%d slaves=%d",
+                name().c_str(), config_.channel, master_->getSlaveCount());
+    return true;
+  }
+
+  void stop() override {
+    monitor_running_ = false;
+    if (monitor_thread_.joinable()) {
+      monitor_thread_.join();
+    }
+    if (master_) {
+      master_->stop();
+    }
+  }
+
+  bool isAlive() const override {
+    return master_ &&
+           master_->getState() == EthercatMaster::EthercatState::Operational;
+  }
+
+  bool attachHand(const std::shared_ptr<HandDevice>& hand,
+                  rclcpp::Logger logger) override {
+    if (!isAlive()) return false;
+    const int slave_id = hand->address();
+    if (master_->getSlaveInputSize(slave_id) <= 0 ||
+        master_->getSlaveOutputSize(slave_id) <= 0) {
+      RCLCPP_ERROR(logger, "[%s/%s] EtherCAT slave_id 无效或无 PDO: %d",
+                   name().c_str(), hand->name().c_str(), slave_id);
+      return false;
+    }
+    hand->setBus(shared_from_this(), type());
+    hand->setEthercatSendFunction(
+        [this, slave_id](const unsigned char* data, unsigned int size) {
+          return master_ && master_->setSlaveOutputs(slave_id, data, size);
+        });
+    addHand(hand);
+    return hand->initialize(type(), logger);
+  }
+
+ private:
+  void ensureMonitorRunning() {
+    if (monitor_running_ || !master_) return;
+    monitor_running_ = true;
+    monitor_thread_ = std::thread([this]() {
+      while (monitor_running_) {
+        for (const auto& hand : attachedHands()) {
+          if (!hand->isInitialized()) continue;
+          const int slave_id = hand->address();
+          const int input_size = master_->getSlaveInputSize(slave_id);
+          if (input_size <= 0) continue;
+          std::vector<uint8_t> buffer(input_size);
+          if (master_->getSlaveInputs(slave_id, buffer.data(), input_size)) {
+            hand->decodeEthercat(buffer.data(), input_size);
+          }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
+    });
+  }
+
+  std::shared_ptr<EthercatMaster> master_;
+  std::atomic<bool> monitor_running_{false};
+  std::thread monitor_thread_;
+};
+
+std::shared_ptr<BusBase> makeBus(const BusConfig& config) {
+  switch (config.type) {
+    case BusType::Ethercat:
+      return std::make_shared<EthercatBus>(config);
+    case BusType::Canfd:
+      return std::make_shared<CanfdBus>(config);
+    case BusType::Rs485:
+      return std::make_shared<Rs485Bus>(config);
+  }
+  return nullptr;
+}
+
+std::string serviceName(const std::string& prefix, const char* name) {
+  if (prefix.empty()) return name;
+  return prefix + "/" + name;
+}
+
+}  // namespace
+
+struct HandControlService::Impl {
+  explicit Impl(HandControlService* node) : node_(node) {
+    loadConfig();
+    createBuses();
+    createHands();
+    startBuses();
+    attachHands();
+    registerAllServices();
+    reconnect_timer_ = node_->create_wall_timer(
+        std::chrono::seconds(5), [this]() { checkAndReconnect(); });
+  }
+
+  ~Impl() {
+    services_.clear();
+    hands_.clear();
+    for (auto& item : buses_) {
+      item.second->stop();
+    }
+    buses_.clear();
+  }
+
+  rclcpp::Logger logger() const { return node_->get_logger(); }
+
+  void loadConfig() {
+    const std::string default_type = defaultBusType();
+    bus_names_ =
+        node_->declare_parameter<std::vector<std::string>>("bus_names",
+                                                           std::vector<std::string>{
+                                                               "bus0"});
+    hand_names_ =
+        node_->declare_parameter<std::vector<std::string>>("hand_names",
+                                                           std::vector<std::string>{
+                                                               "hand"});
+    validateNameList(bus_names_, "bus_names");
+    validateNameList(hand_names_, "hand_names");
+
+    compat_single_hand_services_ =
+        node_->declare_parameter<bool>("compat_single_hand_services", true);
+    default_hand_name_ =
+        node_->declare_parameter<std::string>("default_hand", hand_names_[0]);
+
+    for (const auto& bus_name : bus_names_) {
+      BusConfig cfg;
+      cfg.name = bus_name;
+      cfg.type = parseBusType(node_->declare_parameter<std::string>(
+          "buses." + bus_name + ".type", default_type));
+      cfg.channel =
+          node_->declare_parameter<int>("buses." + bus_name + ".channel", 0);
+      cfg.canfd_arb_baudrate = node_->declare_parameter<int>(
+          "buses." + bus_name + ".canfd_arb_baudrate", CANFD_ARB_BAUDRATE);
+      cfg.canfd_data_baudrate = node_->declare_parameter<int>(
+          "buses." + bus_name + ".canfd_data_baudrate", CANFD_DATA_BAUDRATE);
+      cfg.rs485_baudrate = node_->declare_parameter<int>(
+          "buses." + bus_name + ".rs485_baudrate", RS485_BAUDRATE);
+      bus_configs_[bus_name] = cfg;
+    }
+
+    for (const auto& hand_name : hand_names_) {
+      HandConfig cfg;
+      cfg.name = hand_name;
+      cfg.bus_name = node_->declare_parameter<std::string>(
+          "hands." + hand_name + ".bus", bus_names_[0]);
+      auto bus_it = bus_configs_.find(cfg.bus_name);
+      if (bus_it == bus_configs_.end()) {
+        throw std::runtime_error("Hand " + hand_name +
+                                 " references unknown bus " + cfg.bus_name);
+      }
+      cfg.address = node_->declare_parameter<int>(
+          "hands." + hand_name + ".address",
+          defaultAddressForType(bus_it->second.type));
+      const std::string hand_type = node_->declare_parameter<std::string>(
+          "hands." + hand_name + ".hand_type", "LAC_DOF_6");
+      cfg.hand_type = parseHandType(hand_type);
+      hand_configs_[hand_name] = cfg;
+    }
+
+    validateTopology();
+  }
+
+  void validateNameList(const std::vector<std::string>& names,
+                        const std::string& param_name) const {
+    if (names.empty()) {
+      throw std::runtime_error(param_name + " must not be empty");
+    }
+    std::set<std::string> unique_names;
+    for (const auto& name : names) {
+      if (name.empty()) {
+        throw std::runtime_error(param_name + " contains an empty name");
+      }
+      if (!unique_names.insert(name).second) {
+        throw std::runtime_error(param_name + " contains duplicate name: " +
+                                 name);
+      }
+    }
+  }
+
+  void validateTopology() const {
+    std::set<std::pair<std::string, int>> used_addresses;
+    for (const auto& item : hand_configs_) {
+      const auto key = std::make_pair(item.second.bus_name, item.second.address);
+      if (!used_addresses.insert(key).second) {
+        throw std::runtime_error("Duplicate address " +
+                                 std::to_string(item.second.address) +
+                                 " on bus " + item.second.bus_name);
+      }
+    }
+  }
+
+  void createBuses() {
+    for (const auto& item : bus_configs_) {
+      buses_[item.first] = makeBus(item.second);
+      RCLCPP_INFO(logger(), "配置总线: %s type=%s channel=%d",
+                  item.first.c_str(), busTypeName(item.second.type).c_str(),
+                  item.second.channel);
+    }
+  }
+
+  void createHands() {
+    for (const auto& item : hand_configs_) {
+      hands_[item.first] = std::make_shared<HandDevice>(item.second);
+      RCLCPP_INFO(logger(), "配置手: %s bus=%s address=%d",
+                  item.second.name.c_str(), item.second.bus_name.c_str(),
+                  item.second.address);
+    }
+  }
+
+  void startBuses() {
+    for (auto& item : buses_) {
+      item.second->start(logger());
+    }
+  }
+
+  void attachHands() {
+    for (auto& item : hands_) {
+      const auto& hand = item.second;
+      auto bus_it = buses_.find(hand->busName());
+      if (bus_it == buses_.end()) {
+        RCLCPP_ERROR(logger(), "[%s] 找不到总线 %s", hand->name().c_str(),
+                     hand->busName().c_str());
+        continue;
+      }
+      if (!bus_it->second->attachHand(hand, logger())) {
+        RCLCPP_ERROR(logger(), "[%s] 绑定到总线 %s 失败", hand->name().c_str(),
+                     hand->busName().c_str());
+      }
+    }
+  }
+
+  bool checkReady(const std::shared_ptr<HandDevice>& hand,
+                  const char* service_name) const {
+    if (!hand || !hand->isInitialized()) {
+      RCLCPP_ERROR(logger(), "[%s] 手未初始化", service_name);
+      return false;
+    }
+    if (!hand->isBusAlive()) {
+      RCLCPP_ERROR(logger(), "[%s] 总线未连接或通信异常", service_name);
+      return false;
+    }
+    return true;
+  }
+
+  bool checkBusType(const std::shared_ptr<HandDevice>& hand, BusType type,
+                    const char* service_name) const {
+    if (!checkReady(hand, service_name)) return false;
+    if (hand->busType() != type) {
+      RCLCPP_ERROR(logger(), "[%s] 当前手使用 %s 总线，不适用 %s 配置",
+                   service_name, busTypeName(hand->busType()).c_str(),
+                   busTypeName(type).c_str());
+      return false;
+    }
+    return true;
+  }
+
+  bool hasAddressConflict(const std::shared_ptr<HandDevice>& hand,
+                          int address) const {
+    for (const auto& item : hands_) {
+      const auto& other = item.second;
+      if (other.get() == hand.get()) continue;
+      if (other->busName() == hand->busName() &&
+          other->address() == address) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  bool checkJoint(const std::shared_ptr<HandDevice>& hand, int joint_id,
+                  const char* service_name) const {
+    if (!checkReady(hand, service_name)) return false;
+    if (joint_id < 0 || joint_id > hand->activeDof()) {
+      RCLCPP_ERROR(logger(), "[%s] 无效的关节ID: %d", service_name, joint_id);
+      return false;
+    }
+    return true;
+  }
+
+  template <typename SrvT, typename Callback>
+  void addService(const std::shared_ptr<HandDevice>& hand,
+                  const std::string& prefix, const char* name,
+                  Callback&& callback) {
+    const std::string full_name = serviceName(prefix, name);
+    services_.push_back(node_->create_service<SrvT>(
+        full_name, [hand, cb = std::forward<Callback>(callback)](
+                       const std::shared_ptr<typename SrvT::Request> req,
+                       std::shared_ptr<typename SrvT::Response> res) {
+          cb(hand, req, res);
+        }));
+  }
+
+  void registerAllServices() {
+    for (const auto& item : hands_) {
+      registerServicesForHand(item.second, item.second->name());
+    }
+
+    auto default_it = hands_.find(default_hand_name_);
+    if (compat_single_hand_services_ && default_it != hands_.end()) {
+      registerServicesForHand(default_it->second, "");
+      RCLCPP_INFO(logger(), "已注册兼容单手服务，默认手: %s",
+                  default_hand_name_.c_str());
+    }
+  }
+
+  void registerServicesForHand(const std::shared_ptr<HandDevice>& hand,
+                               const std::string& prefix) {
+    using namespace lhandpro_interfaces::srv;
+
+    addService<SetEnable>(
+        hand, prefix, SRV_NAME_SET_ENABLE,
+        [this](auto h, auto req, auto res) {
+          if (!checkJoint(h, req->joint_id, SRV_NAME_SET_ENABLE)) {
+            res->result = -1;
+            return;
+          }
+          res->result = h->sdk()->set_enable(req->joint_id, req->enable);
+        });
+    addService<GetEnable>(
+        hand, prefix, SRV_NAME_GET_ENABLE,
+        [this](auto h, auto req, auto res) {
+          if (!checkJoint(h, req->joint_id, SRV_NAME_GET_ENABLE)) {
+            res->enable = 0;
+            return;
+          }
+          int value = 0;
+          h->sdk()->get_enable(req->joint_id, &value);
+          res->enable = value;
+        });
+    addService<GetNowAlarm>(
+        hand, prefix, SRV_NAME_GET_NOW_ALARM,
+        [this](auto h, auto req, auto res) {
+          if (!checkJoint(h, req->joint_id, SRV_NAME_GET_NOW_ALARM)) {
+            res->alarm = 0;
+            return;
+          }
+          int value = 0;
+          h->sdk()->get_now_alarm(req->joint_id, &value);
+          res->alarm = value;
+        });
+    addService<SetClearAlarm>(
+        hand, prefix, SRV_NAME_SET_CLEAR_ALARM,
+        [this](auto h, auto req, auto res) {
+          if (!checkJoint(h, req->joint_id, SRV_NAME_SET_CLEAR_ALARM)) {
+            res->result = -1;
+            return;
+          }
+          res->result = h->sdk()->set_clear_alarm(req->joint_id);
+        });
+    addService<SetAngle>(
+        hand, prefix, SRV_NAME_SET_ANGLE,
+        [this](auto h, auto req, auto res) {
+          if (!checkJoint(h, req->joint_id, SRV_NAME_SET_ANGLE)) {
+            res->result = -1;
+            return;
+          }
+          res->result = h->sdk()->set_target_angle(
+              req->joint_id, static_cast<float>(req->angle));
+        });
+    addService<GetAngle>(
+        hand, prefix, SRV_NAME_GET_ANGLE,
+        [this](auto h, auto req, auto res) {
+          if (!checkJoint(h, req->joint_id, SRV_NAME_GET_ANGLE)) {
+            res->angle = 0.0;
+            return;
+          }
+          float value = 0.0f;
+          h->sdk()->get_target_angle(req->joint_id, &value);
+          res->angle = value;
+        });
+    addService<SetPosition>(
+        hand, prefix, SRV_NAME_SET_POSITION,
+        [this](auto h, auto req, auto res) {
+          if (!checkJoint(h, req->joint_id, SRV_NAME_SET_POSITION)) {
+            res->result = -1;
+            return;
+          }
+          res->result =
+              h->sdk()->set_target_position(req->joint_id, req->position);
+        });
+    addService<GetPosition>(
+        hand, prefix, SRV_NAME_GET_POSITION,
+        [this](auto h, auto req, auto res) {
+          if (!checkJoint(h, req->joint_id, SRV_NAME_GET_POSITION)) {
+            res->position = 0;
+            return;
+          }
+          int value = 0;
+          h->sdk()->get_target_position(req->joint_id, &value);
+          res->position = value;
+        });
+    addService<SetAngularVelocity>(
+        hand, prefix, SRV_NAME_SET_ANGULAR_VELOCITY,
+        [this](auto h, auto req, auto res) {
+          if (!checkJoint(h, req->joint_id, SRV_NAME_SET_ANGULAR_VELOCITY)) {
+            res->result = -1;
+            return;
+          }
+          res->result = h->sdk()->set_angular_velocity(
+              req->joint_id, static_cast<float>(req->velocity));
+        });
+    addService<GetAngularVelocity>(
+        hand, prefix, SRV_NAME_GET_ANGULAR_VELOCITY,
+        [this](auto h, auto req, auto res) {
+          if (!checkJoint(h, req->joint_id, SRV_NAME_GET_ANGULAR_VELOCITY)) {
+            res->velocity = 0.0;
+            return;
+          }
+          float value = 0.0f;
+          h->sdk()->get_angular_velocity(req->joint_id, &value);
+          res->velocity = value;
+        });
+    addService<GetNowAngle>(
+        hand, prefix, SRV_NAME_GET_NOW_ANGLE,
+        [this](auto h, auto req, auto res) {
+          if (!checkJoint(h, req->joint_id, SRV_NAME_GET_NOW_ANGLE)) {
+            res->angle = 0.0;
+            return;
+          }
+          float value = 0.0f;
+          h->sdk()->get_now_angle(req->joint_id, &value);
+          res->angle = value;
+        });
+    addService<GetNowAngularVelocity>(
+        hand, prefix, SRV_NAME_GET_NOW_ANGULAR_VELOCITY,
+        [this](auto h, auto req, auto res) {
+          if (!checkJoint(h, req->joint_id,
+                          SRV_NAME_GET_NOW_ANGULAR_VELOCITY)) {
+            res->velocity = 0.0;
+            return;
+          }
+          float value = 0.0f;
+          h->sdk()->get_now_angular_velocity(req->joint_id, &value);
+          res->velocity = value;
+        });
+    addService<GetNowPosition>(
+        hand, prefix, SRV_NAME_GET_NOW_POSITION,
+        [this](auto h, auto req, auto res) {
+          if (!checkJoint(h, req->joint_id, SRV_NAME_GET_NOW_POSITION)) {
+            res->position = 0;
+            return;
+          }
+          int value = 0;
+          h->sdk()->get_now_position(req->joint_id, &value);
+          res->position = value;
+        });
+    addService<GetNowPositionVelocity>(
+        hand, prefix, SRV_NAME_GET_NOW_POSITION_VELOCITY,
+        [this](auto h, auto req, auto res) {
+          if (!checkJoint(h, req->joint_id,
+                          SRV_NAME_GET_NOW_POSITION_VELOCITY)) {
+            res->velocity = 0;
+            return;
+          }
+          int value = 0;
+          h->sdk()->get_now_position_velocity(req->joint_id, &value);
+          res->velocity = value;
+        });
+    addService<GetNowCurrent>(
+        hand, prefix, SRV_NAME_GET_NOW_CURRENT,
+        [this](auto h, auto req, auto res) {
+          if (!checkJoint(h, req->joint_id, SRV_NAME_GET_NOW_CURRENT)) {
+            res->current = 0.0;
+            return;
+          }
+          int value = 0;
+          h->sdk()->get_now_current(req->joint_id, &value);
+          res->current = static_cast<float>(value);
+        });
+    addService<GetNowStatus>(
+        hand, prefix, SRV_NAME_GET_NOW_STATUS,
+        [this](auto h, auto req, auto res) {
+          if (!checkJoint(h, req->joint_id, SRV_NAME_GET_NOW_STATUS)) {
+            res->status = -1;
+            return;
+          }
+          int value = 0;
+          h->sdk()->get_now_status(req->joint_id, &value);
+          res->status = value;
+        });
+    addService<GetPositionVelocity>(
+        hand, prefix, SRV_NAME_GET_POSITION_VELOCITY,
+        [this](auto h, auto req, auto res) {
+          if (!checkJoint(h, req->joint_id, SRV_NAME_GET_POSITION_VELOCITY)) {
+            res->velocity = 0;
+            return;
+          }
+          int value = 0;
+          h->sdk()->get_position_velocity(req->joint_id, &value);
+          res->velocity = value;
+        });
+    addService<SetPositionVelocity>(
+        hand, prefix, SRV_NAME_SET_POSITION_VELOCITY,
+        [this](auto h, auto req, auto res) {
+          if (!checkJoint(h, req->joint_id, SRV_NAME_SET_POSITION_VELOCITY)) {
+            res->result = -1;
+            return;
+          }
+          res->result =
+              h->sdk()->set_position_velocity(req->joint_id, req->velocity);
+        });
+    addService<GetMaxCurrent>(
+        hand, prefix, SRV_NAME_GET_MAX_CURRENT,
+        [this](auto h, auto req, auto res) {
+          if (!checkJoint(h, req->joint_id, SRV_NAME_GET_MAX_CURRENT)) {
+            res->current = 0.0;
+            return;
+          }
+          int value = 0;
+          h->sdk()->get_max_current(req->joint_id, &value);
+          res->current = static_cast<float>(value);
+        });
+    addService<SetMaxCurrent>(
+        hand, prefix, SRV_NAME_SET_MAX_CURRENT,
+        [this](auto h, auto req, auto res) {
+          if (!checkJoint(h, req->joint_id, SRV_NAME_SET_MAX_CURRENT)) {
+            res->result = -1;
+            return;
+          }
+          res->result = h->sdk()->set_max_current(req->joint_id, req->current);
+        });
+    addService<GetControlMode>(
+        hand, prefix, SRV_NAME_GET_CONTROL_MODE,
+        [this](auto h, auto req, auto res) {
+          if (!checkJoint(h, req->joint_id, SRV_NAME_GET_CONTROL_MODE)) {
+            res->mode = -1;
+            return;
+          }
+          int value = 0;
+          h->sdk()->get_control_mode(req->joint_id, &value);
+          res->mode = value;
+        });
+    addService<SetControlMode>(
+        hand, prefix, SRV_NAME_SET_CONTROL_MODE,
+        [this](auto h, auto req, auto res) {
+          if (!checkJoint(h, req->joint_id, SRV_NAME_SET_CONTROL_MODE)) {
+            res->result = -1;
+            return;
+          }
+          res->result = h->sdk()->set_control_mode(req->joint_id, req->mode);
+        });
+    addService<GetPositionReached>(
+        hand, prefix, SRV_NAME_GET_POSITION_REACHED,
+        [this](auto h, auto req, auto res) {
+          if (!checkJoint(h, req->joint_id, SRV_NAME_GET_POSITION_REACHED)) {
+            res->reached = 0;
+            return;
+          }
+          int value = 0;
+          h->sdk()->get_position_reached(req->joint_id, &value);
+          res->reached = value;
+        });
+    addService<GetTorqueReached>(
+        hand, prefix, SRV_NAME_GET_TORQUE_REACHED,
+        [this](auto h, auto req, auto res) {
+          if (!checkJoint(h, req->joint_id, SRV_NAME_GET_TORQUE_REACHED)) {
+            res->reached = 0;
+            return;
+          }
+          int value = 0;
+          h->sdk()->get_torque_reached(req->joint_id, &value);
+          res->reached = value;
+        });
+    addService<SetMoveNoHome>(
+        hand, prefix, SRV_NAME_SET_MOVE_NO_HOME,
+        [this](auto h, auto req, auto res) {
+          if (!checkReady(h, SRV_NAME_SET_MOVE_NO_HOME)) {
+            res->result = -1;
+            return;
+          }
+          res->result = h->sdk()->set_move_no_home(req->enable);
+        });
+    addService<GetFirmwareVersion>(
+        hand, prefix, SRV_NAME_GET_FIRMWARE_VERSION,
+        [this](auto h, auto req, auto res) {
+          (void)req;
+          if (!checkReady(h, SRV_NAME_GET_FIRMWARE_VERSION)) {
+            res->version = 0.0;
+            return;
+          }
+          float value = 0.0f;
+          h->sdk()->get_firmware_version(&value);
+          res->version = value;
+        });
+    addService<GetSerialNumber>(
+        hand, prefix, SRV_NAME_GET_SERIAL_NUMBER,
+        [this](auto h, auto req, auto res) {
+          (void)req;
+          if (!checkReady(h, SRV_NAME_GET_SERIAL_NUMBER)) {
+            res->serial_number = "";
+            return;
+          }
+          char value[128] = {};
+          h->sdk()->get_serial_number(value, static_cast<int>(sizeof(value)));
+          res->serial_number = value;
+        });
+    addService<SetSafeCurrentEnable>(
+        hand, prefix, SRV_NAME_SET_SAFE_CURRENT_ENABLE,
+        [this](auto h, auto req, auto res) {
+          if (!checkReady(h, SRV_NAME_SET_SAFE_CURRENT_ENABLE)) {
+            res->result = -1;
+            return;
+          }
+          res->result = h->sdk()->set_safe_current_enable(req->enable);
+        });
+    addService<GetSafeCurrentEnable>(
+        hand, prefix, SRV_NAME_GET_SAFE_CURRENT_ENABLE,
+        [this](auto h, auto req, auto res) {
+          (void)req;
+          if (!checkReady(h, SRV_NAME_GET_SAFE_CURRENT_ENABLE)) {
+            res->enable = 0;
+            return;
+          }
+          int value = 0;
+          h->sdk()->get_safe_current_enable(&value);
+          res->enable = value;
+        });
+    addService<SetHomeCurrent>(
+        hand, prefix, SRV_NAME_SET_HOME_CURRENT,
+        [this](auto h, auto req, auto res) {
+          if (!checkReady(h, SRV_NAME_SET_HOME_CURRENT)) {
+            res->result = -1;
+            return;
+          }
+          res->result = h->sdk()->set_home_current(req->current);
+        });
+    addService<GetHomeCurrent>(
+        hand, prefix, SRV_NAME_GET_HOME_CURRENT,
+        [this](auto h, auto req, auto res) {
+          (void)req;
+          if (!checkReady(h, SRV_NAME_GET_HOME_CURRENT)) {
+            res->current = 0;
+            return;
+          }
+          int value = 0;
+          h->sdk()->get_home_current(&value);
+          res->current = value;
+        });
+    addService<SetCanNodeId>(
+        hand, prefix, SRV_NAME_SET_CAN_NODE_ID,
+        [this](auto h, auto req, auto res) {
+          if (!checkBusType(h, BusType::Canfd, SRV_NAME_SET_CAN_NODE_ID) ||
+              req->node_id <= 0 ||
+              hasAddressConflict(h, req->node_id)) {
+            res->result = -1;
+            return;
+          }
+          res->result = h->sdk()->set_can_node_id(req->node_id);
+          if (res->result == 0 && req->node_id > 0) h->setAddress(req->node_id);
+        });
+    addService<GetCanNodeId>(
+        hand, prefix, SRV_NAME_GET_CAN_NODE_ID,
+        [this](auto h, auto req, auto res) {
+          (void)req;
+          if (!checkBusType(h, BusType::Canfd, SRV_NAME_GET_CAN_NODE_ID)) {
+            res->node_id = -1;
+            return;
+          }
+          int value = h->address();
+          h->sdk()->get_can_node_id(&value);
+          res->node_id = value;
+        });
+    addService<SetCanfdArbBaudrate>(
+        hand, prefix, SRV_NAME_SET_CANFD_ARB_BAUDRATE,
+        [this](auto h, auto req, auto res) {
+          if (!checkBusType(h, BusType::Canfd,
+                            SRV_NAME_SET_CANFD_ARB_BAUDRATE)) {
+            res->result = -1;
+            return;
+          }
+          res->result = h->sdk()->set_canfd_arb_baudrate(req->baudrate);
+        });
+    addService<GetCanfdArbBaudrate>(
+        hand, prefix, SRV_NAME_GET_CANFD_ARB_BAUDRATE,
+        [this](auto h, auto req, auto res) {
+          (void)req;
+          if (!checkBusType(h, BusType::Canfd,
+                            SRV_NAME_GET_CANFD_ARB_BAUDRATE)) {
+            res->baudrate = -1;
+            return;
+          }
+          int value = CANFD_ARB_BAUDRATE;
+          h->sdk()->get_canfd_arb_baudrate(&value);
+          res->baudrate = value;
+        });
+    addService<SetCanfdDataBaudrate>(
+        hand, prefix, SRV_NAME_SET_CANFD_DATA_BAUDRATE,
+        [this](auto h, auto req, auto res) {
+          if (!checkBusType(h, BusType::Canfd,
+                            SRV_NAME_SET_CANFD_DATA_BAUDRATE)) {
+            res->result = -1;
+            return;
+          }
+          res->result = h->sdk()->set_canfd_data_baudrate(req->baudrate);
+        });
+    addService<GetCanfdDataBaudrate>(
+        hand, prefix, SRV_NAME_GET_CANFD_DATA_BAUDRATE,
+        [this](auto h, auto req, auto res) {
+          (void)req;
+          if (!checkBusType(h, BusType::Canfd,
+                            SRV_NAME_GET_CANFD_DATA_BAUDRATE)) {
+            res->baudrate = -1;
+            return;
+          }
+          int value = CANFD_DATA_BAUDRATE;
+          h->sdk()->get_canfd_data_baudrate(&value);
+          res->baudrate = value;
+        });
+    addService<SetRs485NodeId>(
+        hand, prefix, SRV_NAME_SET_RS485_NODE_ID,
+        [this](auto h, auto req, auto res) {
+          if (!checkBusType(h, BusType::Rs485, SRV_NAME_SET_RS485_NODE_ID) ||
+              req->node_id <= 0 ||
+              hasAddressConflict(h, req->node_id)) {
+            res->result = -1;
+            return;
+          }
+          res->result = h->sdk()->set_rs485_node_id(req->node_id);
+          if (res->result == 0 && req->node_id > 0) h->setAddress(req->node_id);
+        });
+    addService<GetRs485NodeId>(
+        hand, prefix, SRV_NAME_GET_RS485_NODE_ID,
+        [this](auto h, auto req, auto res) {
+          (void)req;
+          if (!checkBusType(h, BusType::Rs485, SRV_NAME_GET_RS485_NODE_ID)) {
+            res->node_id = -1;
+            return;
+          }
+          int value = h->address();
+          h->sdk()->get_rs485_node_id(&value);
+          res->node_id = value;
+        });
+    addService<SetRs485Baudrate>(
+        hand, prefix, SRV_NAME_SET_RS485_BAUDRATE,
+        [this](auto h, auto req, auto res) {
+          if (!checkBusType(h, BusType::Rs485, SRV_NAME_SET_RS485_BAUDRATE)) {
+            res->result = -1;
+            return;
+          }
+          res->result = h->sdk()->set_rs485_baudrate(req->baudrate);
+        });
+    addService<GetRs485Baudrate>(
+        hand, prefix, SRV_NAME_GET_RS485_BAUDRATE,
+        [this](auto h, auto req, auto res) {
+          (void)req;
+          if (!checkBusType(h, BusType::Rs485, SRV_NAME_GET_RS485_BAUDRATE)) {
+            res->baudrate = -1;
+            return;
+          }
+          int value = RS485_BAUDRATE;
+          h->sdk()->get_rs485_baudrate(&value);
+          res->baudrate = value;
+        });
+    addService<HomeMotors>(
+        hand, prefix, SRV_NAME_HOME_MOTORS,
+        [this](auto h, auto req, auto res) {
+          if (!checkJoint(h, req->joint_id, SRV_NAME_HOME_MOTORS)) {
+            res->result = -1;
+            return;
+          }
+          res->result = h->sdk()->home_motors(req->joint_id);
+        });
+    addService<MoveMotors>(
+        hand, prefix, SRV_NAME_MOVE_MOTORS,
+        [this](auto h, auto req, auto res) {
+          if (!checkJoint(h, req->joint_id, SRV_NAME_MOVE_MOTORS)) {
+            res->result = -1;
+            return;
+          }
+          res->result = h->sdk()->move_motors(req->joint_id);
+        });
+    addService<ControlMotors>(
+        hand, prefix, SRV_NAME_CONTROL_MOTORS,
+        [this](auto h, auto req, auto res) {
+          if (!checkReady(h, SRV_NAME_CONTROL_MOTORS) || h->activeDof() < 6) {
+            res->result = -1;
+            return;
+          }
+
+          const int positions[6] = {req->position_1, req->position_2,
+                                    req->position_3, req->position_4,
+                                    req->position_5, req->position_6};
+          const int velocities[6] = {req->velocity_1, req->velocity_2,
+                                     req->velocity_3, req->velocity_4,
+                                     req->velocity_5, req->velocity_6};
+          const int currents[6] = {req->current_1, req->current_2,
+                                   req->current_3, req->current_4,
+                                   req->current_5, req->current_6};
+
+          for (int i = 0; i < 6; ++i) {
+            const int joint_id = i + 1;
+            int result = h->sdk()->set_target_position(joint_id, positions[i]);
+            if (result != 0) {
+              res->result = result;
+              return;
+            }
+            result = h->sdk()->set_position_velocity(joint_id, velocities[i]);
+            if (result != 0) {
+              res->result = result;
+              return;
+            }
+            result = h->sdk()->set_max_current(joint_id, currents[i]);
+            if (result != 0) {
+              res->result = result;
+              return;
+            }
+          }
+
+          res->result = h->sdk()->move_motors(0);
+        });
+    addService<StopMotors>(
+        hand, prefix, SRV_NAME_STOP_MOTORS,
+        [this](auto h, auto req, auto res) {
+          if (!checkJoint(h, req->joint_id, SRV_NAME_STOP_MOTORS)) {
+            res->result = -1;
+            return;
+          }
+          res->result = h->sdk()->stop_motors(req->joint_id);
+        });
+    addService<PlayGesture>(
+        hand, prefix, SRV_NAME_PLAY_GESTURE,
+        [this](auto h, auto req, auto res) {
+          if (!checkReady(h, SRV_NAME_PLAY_GESTURE)) {
+            res->result = -1;
+            return;
+          }
+          res->result = h->sdk()->play_gesture(req->gesture_id, req->velocity,
+                                               req->current);
+        });
+  }
+
+  void checkAndReconnect() {
+    for (auto& item : buses_) {
+      if (!item.second->isAlive()) {
+        RCLCPP_WARN(logger(), "[%s] 总线异常，尝试重连", item.first.c_str());
+        item.second->restart(logger());
+      }
+    }
+  }
+
+  HandControlService* node_;
+  std::vector<std::string> bus_names_;
+  std::vector<std::string> hand_names_;
+  std::string default_hand_name_;
+  bool compat_single_hand_services_{true};
+  std::unordered_map<std::string, BusConfig> bus_configs_;
+  std::unordered_map<std::string, HandConfig> hand_configs_;
+  std::unordered_map<std::string, std::shared_ptr<BusBase>> buses_;
+  std::unordered_map<std::string, std::shared_ptr<HandDevice>> hands_;
+  std::vector<rclcpp::ServiceBase::SharedPtr> services_;
+  rclcpp::TimerBase::SharedPtr reconnect_timer_;
+};
 
 HandControlService::HandControlService() : Node("lhandpro_service") {
-  RCLCPP_INFO(this->get_logger(), "LHandPro控制服务已创建");
-  lhp_lib_ = std::make_shared<lhplib::LHandProLib>();
-  ec_master_ = std::make_shared<EthercatMaster>();
-  canfd_master_ = std::make_shared<CANFDMaster>();
-
-  is_connected_ = false;
-  current_channel_ = 0;  // 手动修改默认通道
-
-#if COMMUNICATION_MODE == 1
-  RCLCPP_INFO(this->get_logger(), "使用CANFD通讯方式");
-  init_canfd(current_channel_);
-#else
-  RCLCPP_INFO(this->get_logger(), "使用EtherCAT通讯方式");
-  init_ethercat(current_channel_);
-#endif
-  init_config();
-  init_service();
-
-  // 每5秒检查一次连接状态
-  reconnect_timer_ = this->create_wall_timer(
-      std::chrono::seconds(5), [this]() { this->check_and_reconnect(); });
+  RCLCPP_INFO(this->get_logger(), "LHandPro 控制服务已创建");
+  impl_ = std::make_unique<Impl>(this);
 }
 
-HandControlService::~HandControlService() {
-  if (ec_master_) {
-    ec_master_->stop();
-  }
-  if (canfd_master_) {
-    canfd_master_->disconnect();
-  }
-  if (lhp_lib_) {
-    lhp_lib_->close();
-  }
-}
-
-bool HandControlService::init_ethercat(int channel) {
-  cleanup_resources();
-
-  int target = channel;
-  auto channels = ec_master_->scanNetworkInterfaces();
-  if (channels.size() == 0) {
-    RCLCPP_ERROR(this->get_logger(), "没有端口");
-    return false;
-  }
-
-  for (size_t i = 0; i < channels.size(); ++i)
-    RCLCPP_INFO(this->get_logger(), "扫描到:%d --- %s", (int)i,
-                channels[i].c_str());
-
-  RCLCPP_INFO(this->get_logger(), "正在连接:%d --- %s", target,
-              channels[target].c_str());
-
-  // 初始化
-  if (ec_master_->init(channel) == false) {
-    RCLCPP_ERROR(this->get_logger(), "连接失败");
-    return false;
-  }
-  // 启动到OP
-  if (!ec_master_->start()) {
-    RCLCPP_ERROR(this->get_logger(), "OP失败");
-    return false;
-  }
-  // 启动后台通信（非阻塞）
-  ec_master_->run();
-
-  /****** LHandProLib的初始化 ******/
-  // EtherCAT的发送函数
-  auto send_func = [this](const unsigned char* data, unsigned int size) {
-    return ec_master_->setOutputs(data, size);
-  };
-  // 使用std::function包装
-  ecat_send_function_ = send_func;
-
-  // 设置回调
-  lhp_lib_->set_send_rpdo_callback_ex(&ecat_send_function_);
-
-  // 等待一会儿, 再初始化
-  std::this_thread::sleep_for(std::chrono::milliseconds(200));
-  lhp_lib_->initial(lhplib::LCN_ECAT);
-
-  // 监控线程, 刷新TPDO数据
-  start_monitor();  // 启动监控
-
-  is_connected_ = true;
-  current_channel_ = target;
-  return true;
-}
-
-bool HandControlService::init_canfd(int channel) {
-  cleanup_resources();
-
-  int target = channel;
-  std::vector<std::string> names = canfd_master_->scanDevices();
-  if (names.size() == 0) {
-    RCLCPP_ERROR(this->get_logger(), "未找到CANFD通道");
-    return false;
-  }
-
-  for (size_t i = 0; i < names.size(); ++i) {
-    RCLCPP_INFO(this->get_logger(), "扫描到:%d --- %s", static_cast<int>(i),
-                names[i].c_str());
-  }
-
-  if (target < 0 || target >= static_cast<int>(names.size())) {
-    RCLCPP_ERROR(this->get_logger(), "无效的通道索引: %d", target);
-    return false;
-  }
-
-  RCLCPP_INFO(this->get_logger(), "正在连接:%d --- %s", target,
-              names[target].c_str());
-
-  // 连接, 仲裁段波特率 1000kbps, 数据段波特率 5000kbps
-  if (!canfd_master_->connect(target, 1000, 5000)) {
-    RCLCPP_ERROR(this->get_logger(), "连接失败");
-    return false;
-  }
-
-  /****** LHandProLib的初始化 ******/
-  // CANFD的发送函数
-  auto send_func = [this](unsigned int id, const unsigned char* data,
-                          unsigned int size) {
-    return canfd_master_->sendData(id, data, size);
-  };
-  // 使用std::function包装
-  canfd_send_function_ = send_func;
-
-  // 处理CANFD发送数据的回调
-  lhp_lib_->set_send_canfd_callback_ex(&canfd_send_function_);
-
-  // 设置接收回调函数, 刷新解析数据
-  canfd_master_->setReceiveCallback([this](uint32_t id,
-                                           const std::vector<uint8_t>& data,
-                                           uint64_t timestamp) {
-    lhp_lib_->set_canfd_data_decode(id, data.data(), data.size());
-  });
-
-  // 初始化LHandProLib库
-  if (lhp_lib_->initial(lhplib::LCN_CANFD) != lhplib::LER_NONE) {
-    RCLCPP_ERROR(this->get_logger(), "LHandProLib 初始化失败！");
-    return false;
-  }
-
-  // CANFD数据通过回调函数处理，无需监控线程
-  is_connected_ = true;
-  current_channel_ = target;
-  return true;
-}
-
-void HandControlService::cleanup_resources() {
-  RCLCPP_INFO(this->get_logger(), "清理资源...");
-
-  // 1. 停止监控线程
-  stop_monitor();
-
-  // 2. 停止EtherCAT主站
-  if (ec_master_) {
-    ec_master_->stop();
-  }
-
-  // 3. 断开CANFD连接
-  if (canfd_master_) {
-    canfd_master_->disconnect();
-  }
-
-  // 4. 关闭LHandPro库
-  if (lhp_lib_) {
-    lhp_lib_->close();
-  }
-
-  // 5. 重置状态
-  is_connected_ = false;
-}
-
-void HandControlService::check_and_reconnect() {
-  if (is_connected_) {
-    // 检查是否仍然有效
-    if (!is_alive()) {
-      RCLCPP_WARN(this->get_logger(), "检测到连接异常，尝试重新连接...");
-      is_connected_ = false;
-    }
-  }
-
-  if (!is_connected_) {
-    RCLCPP_INFO(this->get_logger(), "正在尝试重新连接设备...");
-#if COMMUNICATION_MODE == 1
-    init_canfd(current_channel_);
-#else
-    init_ethercat(current_channel_);
-#endif
-  }
-}
-
-void HandControlService::init_config() {
-  if (!is_connected_) return;
-  int total = 0, active = 0;
-  lhp_lib_->get_dof(&total, &active);
-  RCLCPP_INFO(this->get_logger(), "连接成功，总自由度: %d，主动自由度: %d",
-              total, active);
-  active_dof_ = active;
-
-  lhp_lib_->set_hand_type(HAND_TYPE);
-  RCLCPP_INFO(this->get_logger(), "设置灵巧手型号为: %d", HAND_TYPE);
-}
-
-bool HandControlService::is_alive() {
-#if COMMUNICATION_MODE == 1
-  // CANFD连接状态检查
-  if (!canfd_master_) return false;
-  return canfd_master_->isConnected();
-#else
-  // EtherCAT连接状态检查
-  if (!ec_master_) return false;
-  return ec_master_->getState() == EthercatMaster::EthercatState::Operational;
-#endif
-}
-
-bool HandControlService::check_joint_validity(int joint_id,
-                                              const std::string& service_name) {
-  if (!lhp_lib_) {
-    RCLCPP_ERROR(this->get_logger(), "[%s] LHP库未初始化",
-                 service_name.c_str());
-    return false;
-  }
-
-  if (!is_alive()) {
-    RCLCPP_ERROR(this->get_logger(), "[%s] 设备未连接或通信异常",
-                 service_name.c_str());
-    return false;
-  }
-
-  if (joint_id < 0 || joint_id > active_dof_) {
-    RCLCPP_ERROR(this->get_logger(), "[%s] 无效的关节ID: %d",
-                 service_name.c_str(), joint_id);
-    return false;
-  }
-
-  return true;
-}
-
-void HandControlService::start_monitor() {
-  if (monitor_thread_.joinable()) return;  // 已经在运行
-
-  stop_flag_ = false;
-  monitor_thread_ = std::thread([this]() {
-    while (!stop_flag_) {
-      // 监控逻辑
-      int input_size = ec_master_->getInputSize();
-      std::vector<uint8_t> in_buffer(input_size);
-      if (ec_master_->getInputs(in_buffer.data(), input_size)) {
-        lhp_lib_->set_tpdo_data_decode(in_buffer.data(), input_size);
-      }
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-  });
-}
-
-void HandControlService::stop_monitor() {
-  stop_flag_ = true;
-  if (monitor_thread_.joinable()) {
-    monitor_thread_.join();
-  }
-}
-
-void HandControlService::init_service() {
-  if (!is_connected_) return;
-  // 使用宏注册所有服务
-  set_enable_srv_ =
-      REGISTER_SERVICE(SetEnable, SRV_NAME_SET_ENABLE, set_enable_callback);
-  get_now_alarm_srv_ = REGISTER_SERVICE(GetNowAlarm, SRV_NAME_GET_NOW_ALARM,
-                                        get_now_alarm_callback);
-  set_position_srv_ = REGISTER_SERVICE(SetPosition, SRV_NAME_SET_POSITION,
-                                       set_position_callback);
-  get_position_srv_ = REGISTER_SERVICE(GetPosition, SRV_NAME_GET_POSITION,
-                                       get_position_callback);
-  get_now_angle_srv_ = REGISTER_SERVICE(GetNowAngle, SRV_NAME_GET_NOW_ANGLE,
-                                        get_now_angle_callback);
-  get_now_position_srv_ = REGISTER_SERVICE(
-      GetNowPosition, SRV_NAME_GET_NOW_POSITION, get_now_position_callback);
-  get_now_position_velocity_srv_ = REGISTER_SERVICE(
-      GetNowPositionVelocity, SRV_NAME_GET_NOW_POSITION_VELOCITY,
-      get_now_position_velocity_callback);
-  get_now_current_srv_ = REGISTER_SERVICE(
-      GetNowCurrent, SRV_NAME_GET_NOW_CURRENT, get_now_current_callback);
-  get_position_velocity_srv_ =
-      REGISTER_SERVICE(GetPositionVelocity, SRV_NAME_GET_POSITION_VELOCITY,
-                       get_position_velocity_callback);
-  set_position_velocity_srv_ =
-      REGISTER_SERVICE(SetPositionVelocity, SRV_NAME_SET_POSITION_VELOCITY,
-                       set_position_velocity_callback);
-  get_max_current_srv_ = REGISTER_SERVICE(
-      GetMaxCurrent, SRV_NAME_GET_MAX_CURRENT, get_max_current_callback);
-  set_max_current_srv_ = REGISTER_SERVICE(
-      SetMaxCurrent, SRV_NAME_SET_MAX_CURRENT, set_max_current_callback);
-  get_control_mode_srv_ = REGISTER_SERVICE(
-      GetControlMode, SRV_NAME_GET_CONTROL_MODE, get_control_mode_callback);
-  set_control_mode_srv_ = REGISTER_SERVICE(
-      SetControlMode, SRV_NAME_SET_CONTROL_MODE, set_control_mode_callback);
-  home_motors_srv_ =
-      REGISTER_SERVICE(HomeMotors, SRV_NAME_HOME_MOTORS, home_motors_callback);
-  move_motors_srv_ =
-      REGISTER_SERVICE(MoveMotors, SRV_NAME_MOVE_MOTORS, move_motors_callback);
-  control_motors_srv_ = REGISTER_SERVICE(ControlMotors, SRV_NAME_CONTROL_MOTORS,
-                                         control_motors_callback);
-}
-
-void HandControlService::set_enable_callback(
-    const std::shared_ptr<lhandpro_interfaces::srv::SetEnable::Request> req,
-    std::shared_ptr<lhandpro_interfaces::srv::SetEnable::Response> res) {
-  const char* service_name = SRV_NAME_SET_ENABLE;
-  if (!check_joint_validity(req->joint_id, service_name)) {
-    res->result = -1;
-    return;
-  }
-  int retn = lhp_lib_->set_enable(req->joint_id, req->enable);
-  if (retn != 0) {
-    RCLCPP_WARN(this->get_logger(), "[%s] 设置使能失败，错误码：%d",
-                service_name, retn);
-  }
-  res->result = retn;
-}
-
-void HandControlService::get_now_alarm_callback(
-    const std::shared_ptr<lhandpro_interfaces::srv::GetNowAlarm::Request> req,
-    std::shared_ptr<lhandpro_interfaces::srv::GetNowAlarm::Response> res) {
-  const char* service_name = SRV_NAME_GET_NOW_ALARM;
-  if (!check_joint_validity(req->joint_id, service_name)) {
-    res->alarm = 0;
-    return;
-  }
-  int alarm = 0;
-  int retn = lhp_lib_->get_now_alarm(req->joint_id, &alarm);
-  if (retn != 0) {
-    RCLCPP_WARN(this->get_logger(), "[%s] 获取当前报警失败，错误码：%d",
-                service_name, retn);
-  }
-  res->alarm = alarm;
-}
-
-void HandControlService::set_position_callback(
-    const std::shared_ptr<lhandpro_interfaces::srv::SetPosition::Request> req,
-    std::shared_ptr<lhandpro_interfaces::srv::SetPosition::Response> res) {
-  const char* service_name = SRV_NAME_SET_POSITION;
-  if (!check_joint_validity(req->joint_id, service_name)) {
-    res->result = -1;
-    return;
-  }
-  int retn = lhp_lib_->set_target_position(req->joint_id, req->position);
-  if (retn != 0) {
-    RCLCPP_WARN(this->get_logger(), "[%s] 设置位置失败，错误码：%d",
-                service_name, retn);
-  }
-  res->result = retn;
-}
-
-void HandControlService::get_position_callback(
-    const std::shared_ptr<lhandpro_interfaces::srv::GetPosition::Request> req,
-    std::shared_ptr<lhandpro_interfaces::srv::GetPosition::Response> res) {
-  const char* service_name = SRV_NAME_GET_POSITION;
-  if (!check_joint_validity(req->joint_id, service_name)) {
-    res->position = 0;
-    return;
-  }
-  int position = 0;
-  int retn = lhp_lib_->get_target_position(req->joint_id, &position);
-  if (retn != 0) {
-    RCLCPP_WARN(this->get_logger(), "[%s] 获取目标位置失败，错误码：%d",
-                service_name, retn);
-  }
-  res->position = position;
-}
-
-void HandControlService::get_now_angle_callback(
-    const std::shared_ptr<lhandpro_interfaces::srv::GetNowAngle::Request> req,
-    std::shared_ptr<lhandpro_interfaces::srv::GetNowAngle::Response> res) {
-  const char* service_name = SRV_NAME_GET_NOW_ANGLE;
-  if (!check_joint_validity(req->joint_id, service_name)) {
-    res->angle = 0.0f;
-    return;
-  }
-  float angle = 0.0f;
-  int retn = lhp_lib_->get_now_angle(req->joint_id, &angle);
-  if (retn != 0) {
-    RCLCPP_WARN(this->get_logger(), "[%s] 获取当前角度失败，错误码：%d",
-                service_name, retn);
-  }
-  res->angle = angle;
-}
-
-void HandControlService::get_now_position_callback(
-    const std::shared_ptr<lhandpro_interfaces::srv::GetNowPosition::Request>
-        req,
-    std::shared_ptr<lhandpro_interfaces::srv::GetNowPosition::Response> res) {
-  const char* service_name = SRV_NAME_GET_NOW_POSITION;
-  if (!check_joint_validity(req->joint_id, service_name)) {
-    res->position = 0;
-    return;
-  }
-  int position = 0;
-  int retn = lhp_lib_->get_now_position(req->joint_id, &position);
-  if (retn != 0) {
-    RCLCPP_WARN(this->get_logger(), "[%s] 获取当前位置失败，错误码：%d",
-                service_name, retn);
-  }
-  res->position = position;
-}
-
-void HandControlService::get_now_position_velocity_callback(
-    const std::shared_ptr<
-        lhandpro_interfaces::srv::GetNowPositionVelocity::Request>
-        req,
-    std::shared_ptr<lhandpro_interfaces::srv::GetNowPositionVelocity::Response>
-        res) {
-  const char* service_name = SRV_NAME_GET_NOW_POSITION_VELOCITY;
-  if (!check_joint_validity(req->joint_id, service_name)) {
-    res->velocity = 0;
-    return;
-  }
-  int velocity = 0;
-  int retn = lhp_lib_->get_now_position_velocity(req->joint_id, &velocity);
-  if (retn != 0) {
-    RCLCPP_WARN(this->get_logger(), "[%s] 获取当前速度失败，错误码：%d",
-                service_name, retn);
-  }
-  res->velocity = velocity;
-}
-
-void HandControlService::get_now_current_callback(
-    const std::shared_ptr<lhandpro_interfaces::srv::GetNowCurrent::Request> req,
-    std::shared_ptr<lhandpro_interfaces::srv::GetNowCurrent::Response> res) {
-  const char* service_name = SRV_NAME_GET_NOW_CURRENT;
-  if (!check_joint_validity(req->joint_id, service_name)) {
-    res->current = 0.0;
-    return;
-  }
-  int current = 0;
-  int retn = lhp_lib_->get_now_current(req->joint_id, &current);
-  if (retn != 0) {
-    RCLCPP_WARN(this->get_logger(), "[%s] 获取当前电流失败，错误码：%d",
-                service_name, retn);
-  }
-  res->current = (float)current;
-}
-
-void HandControlService::get_position_velocity_callback(
-    const std::shared_ptr<
-        lhandpro_interfaces::srv::GetPositionVelocity::Request>
-        req,
-    std::shared_ptr<lhandpro_interfaces::srv::GetPositionVelocity::Response>
-        res) {
-  const char* service_name = SRV_NAME_GET_POSITION_VELOCITY;
-  if (!check_joint_validity(req->joint_id, service_name)) {
-    res->velocity = 0;
-    return;
-  }
-  int velocity = 0;
-  int retn = lhp_lib_->get_position_velocity(req->joint_id, &velocity);
-  if (retn != 0) {
-    RCLCPP_WARN(this->get_logger(), "[%s] 获取目标速度失败，错误码：%d",
-                service_name, retn);
-  }
-  res->velocity = velocity;
-}
-
-void HandControlService::set_position_velocity_callback(
-    const std::shared_ptr<
-        lhandpro_interfaces::srv::SetPositionVelocity::Request>
-        req,
-    std::shared_ptr<lhandpro_interfaces::srv::SetPositionVelocity::Response>
-        res) {
-  const char* service_name = SRV_NAME_SET_POSITION_VELOCITY;
-  if (!check_joint_validity(req->joint_id, service_name)) {
-    res->result = -1;
-    return;
-  }
-  int retn = lhp_lib_->set_position_velocity(req->joint_id, req->velocity);
-  if (retn != 0) {
-    RCLCPP_WARN(this->get_logger(), "[%s] 设置速度失败，错误码：%d",
-                service_name, retn);
-  }
-  res->result = retn;
-}
-
-void HandControlService::get_max_current_callback(
-    const std::shared_ptr<lhandpro_interfaces::srv::GetMaxCurrent::Request> req,
-    std::shared_ptr<lhandpro_interfaces::srv::GetMaxCurrent::Response> res) {
-  const char* service_name = SRV_NAME_GET_MAX_CURRENT;
-  if (!check_joint_validity(req->joint_id, service_name)) {
-    res->current = 0.0;
-    return;
-  }
-  int current = 0;
-  int retn = lhp_lib_->get_max_current(req->joint_id, &current);
-  if (retn != 0) {
-    RCLCPP_WARN(this->get_logger(), "[%s] 获取最大电流失败，错误码：%d",
-                service_name, retn);
-  }
-  res->current = (float)current;
-}
-
-void HandControlService::set_max_current_callback(
-    const std::shared_ptr<lhandpro_interfaces::srv::SetMaxCurrent::Request> req,
-    std::shared_ptr<lhandpro_interfaces::srv::SetMaxCurrent::Response> res) {
-  const char* service_name = SRV_NAME_SET_MAX_CURRENT;
-  if (!check_joint_validity(req->joint_id, service_name)) {
-    res->result = -1;
-    return;
-  }
-  int retn = lhp_lib_->set_max_current(req->joint_id, req->current);
-  if (retn != 0) {
-    RCLCPP_WARN(this->get_logger(), "[%s] 设置最大电流失败，错误码：%d",
-                service_name, retn);
-  }
-  res->result = retn;
-}
-
-void HandControlService::get_control_mode_callback(
-    const std::shared_ptr<lhandpro_interfaces::srv::GetControlMode::Request>
-        req,
-    std::shared_ptr<lhandpro_interfaces::srv::GetControlMode::Response> res) {
-  const char* service_name = SRV_NAME_GET_CONTROL_MODE;
-  if (!check_joint_validity(req->joint_id, service_name)) {
-    res->mode = -1;
-    return;
-  }
-  int mode = 0;
-  int retn = lhp_lib_->get_control_mode(req->joint_id, &mode);
-  if (retn != 0) {
-    RCLCPP_WARN(this->get_logger(), "[%s] 获取控制模式失败，错误码：%d",
-                service_name, retn);
-  }
-  res->mode = mode;
-}
-
-void HandControlService::set_control_mode_callback(
-    const std::shared_ptr<lhandpro_interfaces::srv::SetControlMode::Request>
-        req,
-    std::shared_ptr<lhandpro_interfaces::srv::SetControlMode::Response> res) {
-  const char* service_name = SRV_NAME_SET_CONTROL_MODE;
-  if (!check_joint_validity(req->joint_id, service_name)) {
-    res->result = -1;
-    return;
-  }
-  int retn = lhp_lib_->set_control_mode(req->joint_id, req->mode);
-  if (retn != 0) {
-    RCLCPP_WARN(this->get_logger(), "[%s] 设置控制模式失败，错误码：%d",
-                service_name, retn);
-  }
-  res->result = retn;
-}
-
-void HandControlService::home_motors_callback(
-    const std::shared_ptr<lhandpro_interfaces::srv::HomeMotors::Request> req,
-    std::shared_ptr<lhandpro_interfaces::srv::HomeMotors::Response> res) {
-  const char* service_name = SRV_NAME_HOME_MOTORS;
-  if (!check_joint_validity(req->joint_id, service_name)) {
-    res->result = -1;
-    return;
-  }
-
-  int retn = lhp_lib_->home_motors(req->joint_id);
-  if (retn != 0) {
-    RCLCPP_WARN(this->get_logger(), "[%s] 设置回零电机失败，错误码：%d",
-                service_name, retn);
-    res->result = retn;
-    return;
-  }
-  if (req->joint_id == 0) {
-    RCLCPP_INFO(this->get_logger(), "回零关节全部运动 : %d", retn);
-  } else {
-    RCLCPP_INFO(this->get_logger(), "回零关节 %d 运动 : %d", req->joint_id,
-                retn);
-  }
-  res->result = retn;
-}
-
-void HandControlService::move_motors_callback(
-    const std::shared_ptr<lhandpro_interfaces::srv::MoveMotors::Request> req,
-    std::shared_ptr<lhandpro_interfaces::srv::MoveMotors::Response> res) {
-  const char* service_name = SRV_NAME_MOVE_MOTORS;
-  if (!check_joint_validity(req->joint_id, service_name)) {
-    res->result = -1;
-    return;
-  }
-
-  int retn = lhp_lib_->move_motors(req->joint_id);
-  if (retn != 0) {
-    RCLCPP_WARN(this->get_logger(), "[%s] 设置驱动电机失败，错误码：%d",
-                service_name, retn);
-    res->result = retn;
-    return;
-  }
-  if (req->joint_id == 0) {
-    RCLCPP_INFO(this->get_logger(), "驱动关节全部运动 : %d", retn);
-  } else {
-    RCLCPP_INFO(this->get_logger(), "驱动关节 %d 运动 : %d", req->joint_id,
-                retn);
-  }
-  res->result = retn;
-}
-
-void HandControlService::control_motors_callback(
-    const std::shared_ptr<lhandpro_interfaces::srv::ControlMotors::Request> req,
-    std::shared_ptr<lhandpro_interfaces::srv::ControlMotors::Response> res) {
-  const char* service_name = SRV_NAME_CONTROL_MOTORS;
-
-  RCLCPP_INFO(this->get_logger(), "[%s] 收到控制请求", service_name);
-
-  // 将请求参数组织到数组中
-  struct MotorParams {
-    int32_t position;
-    int32_t velocity;
-    int32_t current;
-  };
-
-  MotorParams params[6] = {{req->position_1, req->velocity_1, req->current_1},
-                           {req->position_2, req->velocity_2, req->current_2},
-                           {req->position_3, req->velocity_3, req->current_3},
-                           {req->position_4, req->velocity_4, req->current_4},
-                           {req->position_5, req->velocity_5, req->current_5},
-                           {req->position_6, req->velocity_6, req->current_6}};
-
-  // 使用循环设置所有电机参数
-  for (int i = 0; i < 6; i++) {
-    int motor_id = i + 1;  // 电机ID从1开始
-    int retn = 0;
-
-    retn = lhp_lib_->set_target_position(motor_id, params[i].position);
-    if (retn != 0) {
-      RCLCPP_WARN(this->get_logger(), "[%s] 设置电机%d位置失败: %d",
-                  service_name, motor_id, retn);
-      res->result = retn;
-      return;
-    }
-
-    retn = lhp_lib_->set_position_velocity(motor_id, params[i].velocity);
-    if (retn != 0) {
-      RCLCPP_WARN(this->get_logger(), "[%s] 设置电机%d速度失败: %d",
-                  service_name, motor_id, retn);
-      res->result = retn;
-      return;
-    }
-
-    retn = lhp_lib_->set_max_current(motor_id, params[i].current);
-    if (retn != 0) {
-      RCLCPP_WARN(this->get_logger(), "[%s] 设置电机%d电流失败: %d",
-                  service_name, motor_id, retn);
-      res->result = retn;
-      return;
-    }
-  }
-
-  // 启动所有电机运动
-  int retn = lhp_lib_->move_motors(0);
-  if (retn != 0) {
-    RCLCPP_WARN(this->get_logger(), "[%s] 驱动电机失败: %d", service_name,
-                retn);
-    res->result = retn;
-    return;
-  }
-
-  RCLCPP_INFO(this->get_logger(), "[%s] 所有电机运动完成: %d", service_name,
-              retn);
-  res->result = retn;
-}
+HandControlService::~HandControlService() = default;

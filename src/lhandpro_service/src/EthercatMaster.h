@@ -2,13 +2,16 @@
 #pragma once
 
 #include <atomic>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
 #include <functional>
 #include <future>
+#include <iosfwd>
 #include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
-#include <cstring>
 
 extern "C" {
 #include <soem/soem.h>
@@ -27,47 +30,89 @@ struct SlaveInfo {
 
 std::ostream& operator<<(std::ostream& os, const SlaveInfo& info);
 
+// 三层 OutputBuffer：pending_ → flush_locked → committed_[A/B]
+// 用户线程持 pending_mtx_，comm thread 的 consume() 仅用原子操作（零 mutex 开销）
 struct OutputBuffer {
-  std::vector<uint8_t> buffers[2];  // 双缓冲区
-  std::atomic<int> write_index{0};  // 用户写入的缓冲区索引
-  std::atomic<int> read_index{1};   // 通信线程读取的缓冲区索引
-  std::atomic<bool> dirty{false};   // 是否有新数据
-  std::mutex mtx;                   // 仅用于 resize，非高频锁
+  std::vector<uint8_t> pending_;
+  mutable std::mutex   pending_mtx_;
+  std::vector<uint8_t> committed_[2];
+  std::atomic<int>     latest_idx_{0};
+  std::atomic<bool>    dirty_{false};
 
   void resize(size_t size) {
-    std::lock_guard<std::mutex> lock(mtx);
-    buffers[0].resize(size);
-    buffers[1].resize(size);
+    std::lock_guard<std::mutex> lock(pending_mtx_);
+    pending_.assign(size, 0);
+    committed_[0].assign(size, 0);
+    committed_[1].assign(size, 0);
   }
 
+  // 全量写（覆盖 pending_ 前 len 字节，然后提交快照）
   bool write(const uint8_t* data, size_t len) {
-    if (!data || len == 0 || len > buffers[0].size())
-      return false;
-
-    int wi = write_index.load();
-    int ri = read_index.load();
-    
-    // 总是写入当前写缓冲区
-    std::memcpy(buffers[wi].data(), data, len);
-    
-    // 第一次写入时，同时写入读缓冲区，确保两边数据一致
-    if (!dirty.load()) {
-      std::memcpy(buffers[ri].data(), data, len);
-    }
-
-    // 标记有新数据，交换读写索引（原子操作）
-    write_index.store(ri);  // 下次写入将写入刚被读取的缓冲区（实现交换）
-    dirty.store(true);      // 标记需要同步
-
+    std::lock_guard<std::mutex> lock(pending_mtx_);
+    if (!data || len == 0 || len > pending_.size()) return false;
+    std::memcpy(pending_.data(), data, len);
+    flush_locked();
     return true;
   }
 
-  // 通信线程调用：获取最新数据指针（自动清除 dirty）
-  uint8_t* getLatest() {
-    if (!dirty.exchange(false))
-      return nullptr;                          // 无更新
-    return buffers[read_index.load()].data();  // 返回最新写入的数据
+  // 分片写（修改 pending_ 中 [off, off+len) 范围，然后提交快照）
+  bool write_slice(size_t off, const uint8_t* data, size_t len) {
+    std::lock_guard<std::mutex> lock(pending_mtx_);
+    if (!data || len == 0 || off + len > pending_.size()) return false;
+    std::memcpy(pending_.data() + off, data, len);
+    flush_locked();
+    return true;
   }
+
+  // 单字节写
+  bool write_byte(size_t idx, uint8_t val) {
+    std::lock_guard<std::mutex> lock(pending_mtx_);
+    if (idx >= pending_.size()) return false;
+    pending_[idx] = val;
+    flush_locked();
+    return true;
+  }
+
+  // 全量读 pending_（反映最新写入意图）
+  bool read_all(uint8_t* out, size_t len) const {
+    std::lock_guard<std::mutex> lock(pending_mtx_);
+    if (!out || len == 0 || len > pending_.size()) return false;
+    std::memcpy(out, pending_.data(), len);
+    return true;
+  }
+
+  // 分片读 pending_
+  bool read_slice(size_t off, uint8_t* out, size_t len) const {
+    std::lock_guard<std::mutex> lock(pending_mtx_);
+    if (!out || len == 0 || off + len > pending_.size()) return false;
+    std::memcpy(out, pending_.data() + off, len);
+    return true;
+  }
+
+  // comm thread 专用：仅原子操作，返回 committed 指针（无新数据返回 nullptr）
+  const uint8_t* consume() {
+    if (!dirty_.exchange(false, std::memory_order_acquire)) return nullptr;
+    return committed_[latest_idx_.load(std::memory_order_acquire)].data();
+  }
+
+ private:
+  // 在 pending_mtx_ 保护下将 pending_ 快照写入下一个 committed_ 槽
+  void flush_locked() {
+    int cur  = latest_idx_.load(std::memory_order_relaxed);
+    int next = 1 - cur;
+    std::memcpy(committed_[next].data(), pending_.data(), pending_.size());
+    latest_idx_.store(next, std::memory_order_release);
+    dirty_.store(true, std::memory_order_release);
+  }
+};
+
+struct SlaveIOInfo {
+  int         slave_id;       // 1-based SOEM 从站编号
+  std::string name;
+  int         output_offset;  // 在 grp->outputs 中的字节偏移（无输出则 -1）
+  int         output_bytes;   // 0 = 无输出
+  int         input_offset;   // 在 grp->inputs 中的字节偏移（无输入则 -1）
+  int         input_bytes;    // 0 = 无输入
 };
 
 class EthercatMaster {
@@ -99,8 +144,8 @@ class EthercatMaster {
   // 获取从站状态
   EthercatState getState() const;
 
-  // 获取从站信息
-  SlaveInfo getSlaveInfo() const;
+  // 获取所有从站信息列表
+  std::vector<SlaveInfo> getSlaveInfoList() const;
 
   // 获取丢帧统计
   uint64_t getLostFrames() const;
@@ -109,19 +154,22 @@ class EthercatMaster {
   void resetLostFrames();
 
   // 单字节操作
-  void setOutput(int index, uint8_t value);
-  uint8_t getInput(int index);
+  void    setOutput(int slave_id, int index, uint8_t value);
+  uint8_t getInput(int slave_id, int index);
 
-  // 批量操作
-  bool setOutputs(const uint8_t* data, unsigned int len);
-  bool getInputs(uint8_t* buffer, unsigned int len);
-  bool getOutputs(uint8_t* buffer, unsigned int len);
-  int getOutputSize() const;
-  int getInputSize() const;
+  // PDO 批量操作
+  int  getSlaveCount() const;
+  int  getSlaveOutputSize(int slave_id) const;
+  int  getSlaveInputSize(int slave_id) const;
+  bool setSlaveOutputs(int slave_id, const uint8_t* data, unsigned int len);
+  bool getSlaveInputs(int slave_id, uint8_t* buffer, unsigned int len) const;
+  bool getSlaveOutputs(int slave_id, uint8_t* buffer, unsigned int len) const;
 
   // SDO 读写: 对象字典 (index, subindex)
-  bool sdoRead(uint16_t index, uint8_t subindex, uint32_t* value);
-  bool sdoWrite(uint16_t index, uint8_t subindex, uint32_t value);
+  bool sdoRead(uint16_t index, uint8_t subindex, uint32_t* value,
+               int slave_id);
+  bool sdoWrite(uint16_t index, uint8_t subindex, uint32_t value,
+                int slave_id);
 
  private:
   ecx_contextt context_;                 // SOEM context
@@ -139,7 +187,7 @@ class EthercatMaster {
   // 多线程控制
   std::atomic<bool> running_;
   std::thread worker_thread_;
-  std::mutex io_mutex_;  // 保护 outputs/inputs 访问
+  mutable std::mutex io_mutex_;  // 保护 outputs/inputs 访问
 
   // 缓存指针
   OutputBuffer output_buffer_;  // 双缓冲实现写入
@@ -150,4 +198,8 @@ class EthercatMaster {
 
   uint64_t lost_frames_{0};  // 丢帧计数器
   std::atomic<bool> is_reconnecting_{false};
+
+  // 每从站 PDO 布局信息（init() 后只读，无需锁）
+  std::vector<SlaveIOInfo> slave_io_info_;
+  const SlaveIOInfo* findSlaveInfo(int slave_id) const;
 };

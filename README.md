@@ -1,6 +1,6 @@
 # LHandPro ROS2 示例工程
 
-这是一个基于 ROS2 的 LHandPro 示例工程，支持 EtherCAT 和 CANFD 两种通讯方式。
+这是一个基于 ROS2 的 LHandPro 示例工程，支持 EtherCAT、CANFD 和 RS485 三种通讯方式。
 
 ## 系统要求
 
@@ -94,13 +94,32 @@
 
 - `#define COMMUNICATION_MODE 0` - 使用 EtherCAT 通讯
 - `#define COMMUNICATION_MODE 1` - 使用 CANFD 通讯
+- `#define COMMUNICATION_MODE 2` - 使用 RS485 通讯
+
+CANFD 默认节点和波特率也在同一文件中配置：
+
+- `#define CANFD_NODE_ID 1` - 默认 CANFD 节点 ID
+- `#define CANFD_ARB_BAUDRATE 1000000` - 默认仲裁段波特率，直接使用 SDK 元数据值
+- `#define CANFD_DATA_BAUDRATE 5000000` - 默认数据段波特率，直接使用 SDK 元数据值
+
+RS485 默认节点和波特率也在同一文件中配置：
+
+- `#define RS485_NODE_ID 1` - 默认 RS485 节点 ID
+- `#define RS485_BAUDRATE 500000` - 默认 RS485 串口波特率
+
+Linux 下 CANFD 默认使用 SocketCAN；如需使用 `libcanbus` 后端，构建时添加：
+
+```bash
+colcon build --cmake-args -DLHANDPRO_USE_LIBCANBUS=ON
+```
 
 ### 灵巧手型号切换
 
 在 `src/lhandpro_service/src/hand_control_service.hpp` 文件中修改 `HAND_TYPE` 宏：
 
-- `#define HAND_TYPE lhplib::LAC_DOF_6`
-- `#define HAND_TYPE lhplib::LAC_DOF_6_S` 
+- `#define HAND_TYPE lhplib::LAC_DOF_6` - DH116灵巧手
+- `#define HAND_TYPE lhplib::LAC_DOF_6_S` - DH116S灵巧手
+- `#define HAND_TYPE lhplib::LAC_DOF_16` - 16自由度灵巧手
 
 
 
@@ -109,21 +128,50 @@
 | 服务名称 | 功能描述 |
 |---------|----------|
 | `set_enable` | 设置电机使能状态 |
+| `get_enable` | 获取电机使能状态 |
 | `get_now_alarm` | 获取当前报警状态 |
+| `set_clear_alarm` | 清除电机报警 |
+| `set_angle` | 设置目标角度 |
+| `get_angle` | 获取目标角度 |
 | `set_position` | 设置目标位置 |
 | `get_position` | 获取目标位置 |
+| `set_angular_velocity` | 设置目标角速度 |
+| `get_angular_velocity` | 获取目标角速度 |
 | `get_now_angle` | 获取当前角度 |
+| `get_now_angular_velocity` | 获取当前角速度 |
 | `get_now_position` | 获取当前位置 |
 | `get_now_position_velocity` | 获取当前速度 |
 | `get_now_current` | 获取当前电流 |
+| `get_now_status` | 获取当前运行状态 |
 | `get_position_velocity` | 获取目标速度 |
 | `set_position_velocity` | 设置目标速度 |
 | `get_max_current` | 获取最大电流 |
 | `set_max_current` | 设置最大电流 |
 | `get_control_mode` | 获取控制模式 |
 | `set_control_mode` | 设置控制模式 |
+| `get_position_reached` | 获取位置到位状态 |
+| `get_torque_reached` | 获取力矩到位状态 |
+| `set_move_no_home` | 设置未回零是否允许运动 |
+| `get_firmware_version` | 获取固件版本 |
+| `get_serial_number` | 获取序列号 |
+| `set_safe_current_enable` | 设置安全电流开关 |
+| `get_safe_current_enable` | 获取安全电流开关 |
+| `set_home_current` | 设置回零电流 |
+| `get_home_current` | 获取回零电流 |
+| `set_can_node_id` | 设置 CAN/CANFD 节点 ID |
+| `get_can_node_id` | 获取 CAN/CANFD 节点 ID |
+| `set_canfd_arb_baudrate` | 设置 CANFD 仲裁段波特率 |
+| `get_canfd_arb_baudrate` | 获取 CANFD 仲裁段波特率 |
+| `set_canfd_data_baudrate` | 设置 CANFD 数据段波特率 |
+| `get_canfd_data_baudrate` | 获取 CANFD 数据段波特率 |
+| `set_rs485_node_id` | 设置 RS485 节点 ID |
+| `get_rs485_node_id` | 获取 RS485 节点 ID |
+| `set_rs485_baudrate` | 设置 RS485 波特率 |
+| `get_rs485_baudrate` | 获取 RS485 波特率 |
 | `home_motors` | 电机回零 |
 | `move_motors` | 驱动电机运动 |
+| `stop_motors` | 停止电机运动 |
+| `play_gesture` | 执行内置手势 |
 
 ## 示例调用
 

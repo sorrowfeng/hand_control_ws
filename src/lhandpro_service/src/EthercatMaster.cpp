@@ -1,6 +1,7 @@
 // EthercatMaster.cpp
 #include "EthercatMaster.h"
 
+#include <cctype>
 #include <cstring>
 #include <iomanip>
 #include <iostream>
@@ -161,7 +162,7 @@ std::vector<std::string> EthercatMaster::scanNetworkInterfaces() {
 }
 
 bool EthercatMaster::init(int index) {
-  if (index < 0 || index >= interfaces_.size()) {
+  if (index < 0 || static_cast<size_t>(index) >= interfaces_.size()) {
     ECOUT << "Index not available\n";
     return false;
   }
@@ -190,8 +191,23 @@ bool EthercatMaster::init(int index) {
   outputs_ = grp->outputs;
   inputs_ = grp->inputs;
 
-  //  初始化双缓冲区大小
+  //  初始化缓冲区大小
   output_buffer_.resize(output_bytes_);
+
+  // 填充每从站 PDO 布局信息
+  slave_io_info_.clear();
+  for (int i = 1; i <= context_.slavecount; ++i) {
+    ec_slavet* slave = context_.slavelist + i;
+    if (slave->group != group_) continue;
+    SlaveIOInfo info;
+    info.slave_id      = i;
+    info.name          = std::string(slave->name);
+    info.output_bytes  = (slave->Obytes > 0 && slave->outputs) ? (int)slave->Obytes : 0;
+    info.output_offset = (info.output_bytes > 0) ? (int)(slave->outputs - outputs_) : -1;
+    info.input_bytes   = (slave->Ibytes > 0 && slave->inputs) ? (int)slave->Ibytes : 0;
+    info.input_offset  = (info.input_bytes > 0) ? (int)(slave->inputs - inputs_) : -1;
+    slave_io_info_.push_back(info);
+  }
 
   ECOUT << "mapped " << grp->Obytes << "O+" << grp->Ibytes << "I bytes from "
         << grp->nsegments << " segments";
@@ -320,10 +336,9 @@ void EthercatMaster::run() {
       ECOUT << "Iteration " << std::setw(4) << std::setfill(' ') << iteration
             << ":";
 
-      //  检测是否有新数据，有则同步到 SOEM 输出缓冲区
-      if (uint8_t* latest = output_buffer_.getLatest()) {
-        std::lock_guard<std::mutex> lock(io_mutex_);
-        std::memcpy(outputs_, latest, output_bytes_);
+      // 检测是否有新数据，有则同步到 SOEM 输出缓冲区（仅 comm thread 写 outputs_，无需锁）
+      if (const uint8_t* committed = output_buffer_.consume()) {
+        std::memcpy(outputs_, committed, output_bytes_);
       }
 
       ec_timet start = osal_current_time();
@@ -363,12 +378,12 @@ void EthercatMaster::run() {
 
         ECOUT << std::setw(6) << roundtrip_time_ << " usec  WKC " << wkc;
         ECOUT << "  O:";
-        for (int n = 0; n < grp->Obytes; ++n) {
+        for (uint32_t n = 0; n < grp->Obytes; ++n) {
           ECOUT << " " << std::hex << std::setw(2) << std::setfill('0')
                 << (int)grp->outputs[n] << std::dec;
         }
         ECOUT << "  I:";
-        for (int n = 0; n < grp->Ibytes; ++n) {
+        for (uint32_t n = 0; n < grp->Ibytes; ++n) {
           ECOUT << " " << std::hex << std::setw(2) << std::setfill('0')
                 << (int)grp->inputs[n] << std::dec;
         }
@@ -474,79 +489,96 @@ EthercatMaster::EthercatState EthercatMaster::getState() const {
   EthercatMaster* mutable_this = const_cast<EthercatMaster*>(this);
   ecx_readstate(&mutable_this->context_);
 
-  // 查找从站
-  const ec_slavet* target_slave = nullptr;
+  // 将单个从站状态映射到 EthercatState（优先级从低到高）
+  auto slave_state_to_ethercat = [](uint16_t slave_state) -> EthercatState {
+    if (slave_state & EC_STATE_ERROR)
+      return EthercatState::Error;
+    if (slave_state == EC_STATE_NONE)
+      return EthercatState::Disconnected;
+    switch (slave_state) {
+      case EC_STATE_INIT:
+      case EC_STATE_PRE_OP:
+        return EthercatState::Initializing;
+      case EC_STATE_SAFE_OP:
+        return EthercatState::SafeOperational;
+      case EC_STATE_OPERATIONAL:
+        return EthercatState::Operational;
+      default:
+        return EthercatState::Initializing;
+    }
+  };
+
+  // 优先级顺序（数值越小越差），用于取"最差"状态
+  auto state_priority = [](EthercatState s) -> int {
+    switch (s) {
+      case EthercatState::Error:           return 0;
+      case EthercatState::Disconnected:    return 1;
+      case EthercatState::Reconnecting:    return 2;
+      case EthercatState::Initializing:    return 3;
+      case EthercatState::SafeOperational: return 4;
+      case EthercatState::Operational:     return 5;
+      default:                             return 0;
+    }
+  };
+
+  // 遍历所有属于本 group 的从站，取最差状态
+  bool found_any = false;
+  EthercatState worst = EthercatState::Operational;
+
+  // NONE状态防抖计数器（静态变量，跨调用保持）
+  static int none_state_count = 0;
+  constexpr int MAX_NONE_COUNT = 3;
+
   for (int i = 1; i <= context_.slavecount; ++i) {
     const ec_slavet* slave = context_.slavelist + i;
-    if (slave->group == group_) {
-      target_slave = slave;
-      break;
-    }
+    if (slave->group != group_)
+      continue;
+
+    found_any = true;
+    EthercatState s = slave_state_to_ethercat(slave->state);
+    if (state_priority(s) < state_priority(worst))
+      worst = s;
   }
 
-  if (target_slave == nullptr) {
+  if (!found_any) {
     return EthercatState::Disconnected;
   }
 
-  // 针对单个从站的稳定状态检测
-  uint16_t slave_state = target_slave->state;
-
-  // 错误状态优先级最高
-  if (slave_state & EC_STATE_ERROR) {
-    return EthercatState::Error;
-  }
-
-  // NONE状态处理 - 增加重试机制
-  static int none_state_count = 0;
-  constexpr int MAX_NONE_COUNT = 3;  // 连续3次NONE状态才认为是断开
-
-  if (slave_state == EC_STATE_NONE) {
+  // NONE 状态防抖：连续 MAX_NONE_COUNT 次才确认断开
+  if (worst == EthercatState::Disconnected) {
     none_state_count++;
     if (none_state_count >= MAX_NONE_COUNT) {
-      none_state_count = 0;  // 重置计数器
+      none_state_count = 0;
       return EthercatState::Disconnected;
     }
     return EthercatState::Reconnecting;
   } else {
-    none_state_count = 0;  // 正常状态时重置计数器
+    none_state_count = 0;
   }
 
-  // 正常状态转换
-  switch (slave_state) {
-    case EC_STATE_INIT:
-    case EC_STATE_PRE_OP:
-      return EthercatState::Initializing;
-
-    case EC_STATE_SAFE_OP:
-      return EthercatState::SafeOperational;
-
-    case EC_STATE_OPERATIONAL:
-      return EthercatState::Operational;
-
-    default:
-      return EthercatState::Initializing;
-  }
+  return worst;
 }
 
-SlaveInfo EthercatMaster::getSlaveInfo() const {
-  SlaveInfo info{};
+std::vector<SlaveInfo> EthercatMaster::getSlaveInfoList() const {
+  std::vector<SlaveInfo> result;
 
-  if (context_.slavecount < 1)
-    return info;
+  for (int i = 1; i <= context_.slavecount; ++i) {
+    const ec_slavet* slave = context_.slavelist + i;
+    if (slave->group != group_)
+      continue;
 
-  const ec_slavet* slave = context_.slavelist + 1;
+    SlaveInfo info;
+    info.index = i;
+    info.name = std::string(slave->name);
+    info.state = slave->state;
+    info.al_status = slave->ALstatuscode;
+    info.al_status_str =
+        std::string(ec_ALstatuscode2string(slave->ALstatuscode));
+    info.is_lost = slave->islost;
+    result.push_back(info);
+  }
 
-  if (slave->group != group_)
-    return info;
-
-  info.index = 1;
-  info.name = std::string(slave->name);
-  info.state = slave->state;
-  info.al_status = slave->ALstatuscode;
-  info.al_status_str = std::string(ec_ALstatuscode2string(slave->ALstatuscode));
-  info.is_lost = slave->islost;
-
-  return info;
+  return result;
 }
 
 uint64_t EthercatMaster::getLostFrames() const {
@@ -589,82 +621,116 @@ void EthercatMaster::stop() {
   resetLostFrames();
 }
 
-void EthercatMaster::setOutput(int index, uint8_t value) {
-  if (!started_ || outputs_ == nullptr)
-    return;
-  if (index >= 0 && index < output_bytes_) {
-    std::lock_guard<std::mutex> lock(io_mutex_);
-    outputs_[index] = value;
-  }
+void EthercatMaster::setOutput(int slave_id, int index, uint8_t value) {
+  if (!started_) return;
+  const SlaveIOInfo* info = findSlaveInfo(slave_id);
+  if (!info || info->output_bytes == 0 || info->output_offset < 0) return;
+  if (index < 0 || index >= info->output_bytes) return;
+  output_buffer_.write_byte(static_cast<size_t>(info->output_offset + index), value);
 }
 
-uint8_t EthercatMaster::getInput(int index) {
-  if (!started_ || inputs_ == nullptr)
-    return 0;
-  if (index >= 0 && index < input_bytes_) {
-    std::lock_guard<std::mutex> lock(io_mutex_);
-    return inputs_[index];
-  }
-  return 0;
-}
-
-bool EthercatMaster::setOutputs(const uint8_t* data, unsigned int len) {
-  if (!started_ || !data || len <= 0)
-    return false;
-  if (len > output_bytes_) {
-    ECOUT << "Error: setOutputs length " << len
-          << " exceeds configured output bytes " << output_bytes_ << "\n";
-    return false;
-  }
-
-  // 保证数据能在下一周期发出
-  return output_buffer_.write(data, len);
-}
-
-bool EthercatMaster::getInputs(uint8_t* buffer, unsigned int len) {
-  if (!started_ || !buffer || len <= 0)
-    return false;
-  if (len > input_bytes_) {
-    ECOUT << "Error: getInputs buffer length " << len
-          << " exceeds configured input bytes " << input_bytes_ << "\n";
-    return false;
-  }
-
+uint8_t EthercatMaster::getInput(int slave_id, int index) {
+  if (!started_ || inputs_ == nullptr) return 0;
+  const SlaveIOInfo* info = findSlaveInfo(slave_id);
+  if (!info || info->input_bytes == 0 || info->input_offset < 0) return 0;
+  if (index < 0 || index >= info->input_bytes) return 0;
   std::lock_guard<std::mutex> lock(io_mutex_);
-  memcpy(buffer, inputs_, len);
+  return inputs_[info->input_offset + index];
+}
+
+// ---------------------------------------------------------------------------
+// 按从站粒度的 PDO 操作
+// ---------------------------------------------------------------------------
+
+const SlaveIOInfo* EthercatMaster::findSlaveInfo(int slave_id) const {
+  for (const auto& info : slave_io_info_) {
+    if (info.slave_id == slave_id) return &info;
+  }
+  return nullptr;
+}
+
+int EthercatMaster::getSlaveCount() const {
+  return static_cast<int>(slave_io_info_.size());
+}
+
+int EthercatMaster::getSlaveOutputSize(int slave_id) const {
+  const SlaveIOInfo* info = findSlaveInfo(slave_id);
+  return info ? info->output_bytes : 0;
+}
+
+int EthercatMaster::getSlaveInputSize(int slave_id) const {
+  const SlaveIOInfo* info = findSlaveInfo(slave_id);
+  return info ? info->input_bytes : 0;
+}
+
+bool EthercatMaster::setSlaveOutputs(int slave_id, const uint8_t* data,
+                                     unsigned int len) {
+  if (!started_ || !data || len == 0) return false;
+  const SlaveIOInfo* info = findSlaveInfo(slave_id);
+  if (!info || info->output_bytes == 0 || info->output_offset < 0) {
+    ECOUT << "setSlaveOutputs: slave " << slave_id << " has no outputs\n";
+    return false;
+  }
+  if (len > (unsigned int)info->output_bytes) {
+    ECOUT << "setSlaveOutputs: len " << len << " exceeds slave " << slave_id
+          << " output bytes " << info->output_bytes << "\n";
+    return false;
+  }
+  return output_buffer_.write_slice(
+      static_cast<size_t>(info->output_offset), data, len);
+}
+
+bool EthercatMaster::getSlaveInputs(int slave_id, uint8_t* buffer,
+                                    unsigned int len) const {
+  if (!started_ || !buffer || len == 0) return false;
+  const SlaveIOInfo* info = findSlaveInfo(slave_id);
+  if (!info || info->input_bytes == 0 || info->input_offset < 0) {
+    ECOUT << "getSlaveInputs: slave " << slave_id << " has no inputs\n";
+    return false;
+  }
+  if (len > (unsigned int)info->input_bytes) {
+    ECOUT << "getSlaveInputs: len " << len << " exceeds slave " << slave_id
+          << " input bytes " << info->input_bytes << "\n";
+    return false;
+  }
+  std::lock_guard<std::mutex> lock(io_mutex_);
+  std::memcpy(buffer, inputs_ + info->input_offset, len);
   return true;
 }
 
-bool EthercatMaster::getOutputs(uint8_t* buffer, unsigned int len) {
-  if (!started_ || !buffer || len <= 0)
-    return false;
-  if (len > output_bytes_) {
-    ECOUT << "Error: getOutputs buffer length " << len
-          << " exceeds configured input bytes " << output_bytes_ << "\n";
+bool EthercatMaster::getSlaveOutputs(int slave_id, uint8_t* buffer,
+                                     unsigned int len) const {
+  if (!started_ || !buffer || len == 0) return false;
+  const SlaveIOInfo* info = findSlaveInfo(slave_id);
+  if (!info || info->output_bytes == 0 || info->output_offset < 0) {
+    ECOUT << "getSlaveOutputs: slave " << slave_id << " has no outputs\n";
     return false;
   }
-
-  std::lock_guard<std::mutex> lock(io_mutex_);
-  memcpy(buffer, outputs_, len);
-  return true;
+  if (len > (unsigned int)info->output_bytes) {
+    ECOUT << "getSlaveOutputs: len " << len << " exceeds slave " << slave_id
+          << " output bytes " << info->output_bytes << "\n";
+    return false;
+  }
+  return output_buffer_.read_slice(
+      static_cast<size_t>(info->output_offset), buffer, len);
 }
 
-int EthercatMaster::getOutputSize() const {
-  return output_bytes_;
-}
-
-int EthercatMaster::getInputSize() const {
-  return input_bytes_;
-}
+// ---------------------------------------------------------------------------
+// SDO 读写
+// ---------------------------------------------------------------------------
 
 bool EthercatMaster::sdoRead(uint16_t index, uint8_t subindex,
-                             uint32_t* value) {
+                             uint32_t* value, int slave_id) {
   if (!initialized_) {
     ECOUT << "SOEM not initialized\n";
     return false;
   }
 
-  const int slave_id = 1;
+  if (slave_id < 1 || slave_id > context_.slavecount) {
+    ECOUT << "Invalid slave_id " << slave_id << " (count="
+          << context_.slavecount << ")\n";
+    return false;
+  }
   uint8_t buffer[4];
   int size = sizeof(buffer);
 
@@ -679,7 +745,7 @@ bool EthercatMaster::sdoRead(uint16_t index, uint8_t subindex,
           << "\n";
     return false;
   }
-  if (size < sizeof(uint32_t)) {  // 检查实际读取的数据长度
+  if (size < static_cast<int>(sizeof(uint32_t))) {  // 检查实际读取的数据长度
     ECOUT << "SDO data too short (Expected 4, got " << size << ")\n";
     return false;
   }
@@ -693,13 +759,17 @@ bool EthercatMaster::sdoRead(uint16_t index, uint8_t subindex,
 }
 
 bool EthercatMaster::sdoWrite(uint16_t index, uint8_t subindex,
-                              uint32_t value) {
+                              uint32_t value, int slave_id) {
   if (!initialized_) {
     ECOUT << "SOEM not initialized\n";
     return false;
   }
 
-  const int slave_id = 1;
+  if (slave_id < 1 || slave_id > context_.slavecount) {
+    ECOUT << "Invalid slave_id " << slave_id << " (count="
+          << context_.slavecount << ")\n";
+    return false;
+  }
   uint8_t buffer[4];
 
   // 主机序转小端字节序（适用于EtherCAT设备）

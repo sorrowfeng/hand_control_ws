@@ -1,5 +1,6 @@
-﻿#ifndef CANFDMASTER_H
+#ifndef CANFDMASTER_H
 #define CANFDMASTER_H
+
 #include <atomic>
 #include <cstdint>
 #include <functional>
@@ -7,7 +8,11 @@
 #include <thread>
 #include <vector>
 
-// 回调函数类型定义
+// Linux backend selection:
+// - default: SocketCAN
+// - define USE_LIBCANBUS to use the HCanbus-compatible libcanbus backend.
+//   CMake option: -DLHANDPRO_USE_LIBCANBUS=ON
+
 using ReceiveCallback = std::function<void(
     uint32_t id, const std::vector<uint8_t>& data, uint64_t timestamp)>;
 
@@ -16,58 +21,67 @@ class CANFDMaster {
   CANFDMaster();
   ~CANFDMaster();
 
-  // 扫描可用设备
   std::vector<std::string> scanDevices();
 
-  // 连接设备
-  bool connect(int deviceIndex, int nomBaud, int dataBaud);
-
-  // 断开连接
+  bool connect(int deviceIndex, int nomBaud = 1000000,
+               int dataBaud = 5000000);
   bool disconnect();
-
   bool attemptReconnect();
 
-  // 发送数据（默认64字节）
   bool sendData(unsigned int id, const unsigned char* data, unsigned int size,
                 int externflag = 0);
   bool sendData(uint32_t id, const std::vector<uint8_t>& data,
                 int externflag = 0);
 
-  // 设置接收数据回调函数
   void setReceiveCallback(ReceiveCallback callback);
 
-  // 检查是否已连接
   bool isConnected() const;
-
-  // 获取当前设备索引
   int getCurrentDeviceIndex() const;
-
-  // 获取丢帧统计
   uint64_t getLostFrames() const;
-
-  // 重置丢帧统计
   void resetLostFrames();
 
  private:
-  // 设置CAN接口参数
+#ifndef _WIN32
+#ifndef USE_LIBCANBUS
   bool setupCANInterface(const std::string& ifname, int nomBaud, int dataBaud);
-  
-  // 接收线程函数
+#endif
+#endif
+
   void receiveThreadFunc();
 
  private:
-  int dev_index_;                             // 当前设备索引
-  int nom_baud_;                              // 当前仲裁段波特率
-  int data_baud_;                             // 当前数据段波特率
-  std::atomic<bool> is_connected_;            // 连接状态
-  std::atomic<bool> receive_thread_running_;  // 接收线程运行状态
-  std::thread receive_thread_;                // 接收线程
+  int dev_index_;
+  int nom_baud_;
+  int data_baud_;
+  std::atomic<bool> is_connected_;
+  std::atomic<bool> receive_thread_running_;
+  std::thread receive_thread_;
+  ReceiveCallback receive_callback_;
+  uint64_t lost_frames_{0};
 
-  ReceiveCallback receive_callback_;  // 接收回调函数
+#ifndef _WIN32
+#ifdef USE_LIBCANBUS
+  void* libcan_handle_;
+  void* libusb_handle_;
+  int (*fn_CAN_ScanDevice_)();
+  int (*fn_CAN_OpenDevice_)(int, int);
+  int (*fn_CAN_CloseDevice_)(int, int);
+  int (*fn_CANFD_Init_)(int, int, void*);
+  int (*fn_CANFD_Transmit_)(int, int, void*, int, int);
+  int (*fn_CANFD_Receive_)(int, int, void*, int, int);
 
-  uint64_t lost_frames_{0};  // 丢帧计数器
-  int socket_fd_;            // Socket文件描述符
-  std::string current_interface_;  // 当前使用的CAN接口名称
+  bool loadLibCanBus();
+  void unloadLibCanBus();
+  bool libcanbusConnect(int deviceIndex, int nomBaud, int dataBaud);
+  bool libcanbusDisconnect();
+  bool libcanbusSendData(uint32_t id, const std::vector<uint8_t>& data,
+                         int externflag);
+  void libcanbusReceiveLoop();
+#else
+  int socket_fd_;
+  std::string current_interface_;
+#endif
+#endif
 };
 
 #endif  // CANFDMASTER_H

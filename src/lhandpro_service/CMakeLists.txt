@@ -27,6 +27,8 @@ endif()
 # 设置第三方库路径
 set(THIRDPARTY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty)
 find_library(LHANDPRO_LIB NAMES LHandProLib PATHS ${THIRDPARTY_DIR}/lib REQUIRED)
+set(HCANBUS_ROOT "" CACHE PATH "Path to HCanbus SDK root containing include and lib directories")
+option(LHANDPRO_USE_LIBCANBUS "Use libcanbus backend on Linux instead of SocketCAN" OFF)
 # 导出该库给其他包使用
 ament_export_libraries(${LHANDPRO_LIB})
 ament_export_include_directories(${THIRDPARTY_DIR}/include)
@@ -41,6 +43,7 @@ add_executable(lhandpro_service
   src/hand_control_service.cpp
   src/EthercatMaster.cpp
   src/CANFDMaster.cpp
+  src/RS485Master.cpp
 )
 
 ament_target_dependencies(lhandpro_service rclcpp lhandpro_interfaces)
@@ -50,6 +53,18 @@ target_link_libraries(lhandpro_service ${LHANDPRO_LIB} soem)
 target_include_directories(lhandpro_service PUBLIC
     $<BUILD_INTERFACE:${THIRDPARTY_DIR}/include>
 )
+
+if(WIN32)
+  if(NOT HCANBUS_ROOT)
+    message(FATAL_ERROR "HCANBUS_ROOT is required on Windows for CANFDMaster, e.g. -DHCANBUS_ROOT=C:/path/to/HCanbus/x64")
+  endif()
+  find_library(HCANBUS_LIB NAMES HCanbus PATHS "${HCANBUS_ROOT}/lib" REQUIRED NO_DEFAULT_PATH)
+  target_include_directories(lhandpro_service PRIVATE "${HCANBUS_ROOT}/include")
+  target_link_libraries(lhandpro_service ${HCANBUS_LIB})
+elseif(LHANDPRO_USE_LIBCANBUS)
+  target_compile_definitions(lhandpro_service PRIVATE USE_LIBCANBUS)
+  target_link_libraries(lhandpro_service ${CMAKE_DL_LIBS})
+endif()
 
 # 安装可执行文件
 install(TARGETS 
@@ -69,6 +84,11 @@ install(
 install(DIRECTORY
   launch/
   DESTINATION share/${PROJECT_NAME}/launch
+)
+
+install(DIRECTORY
+  config/
+  DESTINATION share/${PROJECT_NAME}/config
 )
 
 ament_package()
