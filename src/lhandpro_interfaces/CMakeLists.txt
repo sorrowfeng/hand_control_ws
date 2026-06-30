@@ -8,8 +8,10 @@ endif()
 # find dependencies
 find_package(ament_cmake REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
+find_package(std_msgs REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
+  "msg/HandJointState.msg"
   "srv/ControlMotors.srv"
   "srv/GetAngle.srv"
   "srv/GetAngularVelocity.srv"
@@ -56,6 +58,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/SetRs485NodeId.srv"
   "srv/SetSafeCurrentEnable.srv"
   "srv/StopMotors.srv"
+  DEPENDENCIES std_msgs
 )
 
 if(BUILD_TESTING)

@@ -6,6 +6,7 @@
 #include <atomic>
 #include <chrono>
 #include <cctype>
+#include <cmath>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -22,6 +23,7 @@
 #include "EthercatMaster.h"
 #include "RS485Master.h"
 
+#include "lhandpro_interfaces/msg/hand_joint_state.hpp"
 #include "lhandpro_interfaces/srv/control_motors.hpp"
 #include "lhandpro_interfaces/srv/get_angle.hpp"
 #include "lhandpro_interfaces/srv/get_angular_velocity.hpp"
@@ -153,6 +155,7 @@ constexpr const char* SRV_NAME_MOVE_MOTORS = "move_motors";
 constexpr const char* SRV_NAME_STOP_MOTORS = "stop_motors";
 constexpr const char* SRV_NAME_PLAY_GESTURE = "play_gesture";
 constexpr const char* SRV_NAME_CONTROL_MOTORS = "control_motors";
+constexpr const char* TOPIC_NAME_REALTIME_STATE = "realtime_state";
 
 std::string toLower(std::string value) {
   std::transform(value.begin(), value.end(), value.begin(), [](char c) {
@@ -259,8 +262,6 @@ class HandDevice {
   int activeDof() const { return active_dof_; }
   BusType busType() const { return bus_type_; }
   std::shared_ptr<lhplib::LHandProLib> sdk() const { return sdk_; }
-  std::mutex& sdkMutex() { return sdk_mutex_; }
-
   void setBus(const std::shared_ptr<BusBase>& bus, BusType type) {
     bus_ = bus;
     bus_type_ = type;
@@ -288,7 +289,6 @@ class HandDevice {
   }
 
   bool initialize(BusType type, rclcpp::Logger logger) {
-    std::lock_guard<std::mutex> lock(sdk_mutex_);
     sdk_->set_hand_type(hand_type_);
 
     int result = lhplib::LER_NONE;
@@ -313,6 +313,8 @@ class HandDevice {
     int active = 0;
     sdk_->get_dof(&total, &active);
     active_dof_ = active;
+    last_now_angles_.assign(active_dof_ + 1, 0.0f);
+    has_last_now_angle_.assign(active_dof_ + 1, false);
     initialized_ = true;
     RCLCPP_INFO(logger, "[%s] 初始化完成 bus=%s address=%d dof=%d/%d",
                 name_.c_str(), bus_name_.c_str(), address_, active, total);
@@ -334,9 +336,119 @@ class HandDevice {
     sdk_->set_tpdo_data_decode(data, size);
   }
 
+  int readNowAngle(int joint_id, float* angle, bool* from_cache) {
+    if (!angle) return lhplib::LER_UNKNOWN;
+    if (from_cache) *from_cache = false;
+
+    return readNowAngleLocked(joint_id, angle, from_cache);
+  }
+
+  int readNowAngularVelocity(int joint_id, float* velocity) {
+    if (!velocity) return lhplib::LER_UNKNOWN;
+    return sdk_->get_now_angular_velocity(joint_id, velocity);
+  }
+
+  int readNowPosition(int joint_id, int* position) {
+    if (!position) return lhplib::LER_UNKNOWN;
+    return sdk_->get_now_position(joint_id, position);
+  }
+
+  int readNowPositionVelocity(int joint_id, int* velocity) {
+    if (!velocity) return lhplib::LER_UNKNOWN;
+    return sdk_->get_now_position_velocity(joint_id, velocity);
+  }
+
+  int readNowCurrent(int joint_id, int* current) {
+    if (!current) return lhplib::LER_UNKNOWN;
+    return sdk_->get_now_current(joint_id, current);
+  }
+
+  int readNowStatus(int joint_id, int* status) {
+    if (!status) return lhplib::LER_UNKNOWN;
+    return sdk_->get_now_status(joint_id, status);
+  }
+
+  int readNowAlarm(int joint_id, int* alarm) {
+    if (!alarm) return lhplib::LER_UNKNOWN;
+    return sdk_->get_now_alarm(joint_id, alarm);
+  }
+
+  bool readRealtimeState(lhandpro_interfaces::msg::HandJointState& msg) {
+    if (!initialized_) return false;
+
+    msg.hand_name = name_;
+    msg.bus_name = bus_name_;
+    msg.address = address_;
+    msg.active_dof = active_dof_;
+    msg.joint_ids.clear();
+    msg.angles.clear();
+    msg.angular_velocities.clear();
+    msg.positions.clear();
+    msg.position_velocities.clear();
+    msg.currents.clear();
+    msg.statuses.clear();
+    msg.alarms.clear();
+
+    msg.joint_ids.reserve(active_dof_);
+    msg.angles.reserve(active_dof_);
+    msg.angular_velocities.reserve(active_dof_);
+    msg.positions.reserve(active_dof_);
+    msg.position_velocities.reserve(active_dof_);
+    msg.currents.reserve(active_dof_);
+    msg.statuses.reserve(active_dof_);
+    msg.alarms.reserve(active_dof_);
+
+    for (int joint_id = 1; joint_id <= active_dof_; ++joint_id) {
+      float angle = 0.0f;
+      readNowAngleLocked(joint_id, &angle, nullptr);
+
+      float angular_velocity = 0.0f;
+      if (sdk_->get_now_angular_velocity(joint_id, &angular_velocity) !=
+          lhplib::LER_NONE) {
+        angular_velocity = 0.0f;
+      }
+
+      int position = 0;
+      if (sdk_->get_now_position(joint_id, &position) != lhplib::LER_NONE) {
+        position = 0;
+      }
+
+      int position_velocity = 0;
+      if (sdk_->get_now_position_velocity(joint_id, &position_velocity) !=
+          lhplib::LER_NONE) {
+        position_velocity = 0;
+      }
+
+      int current = 0;
+      if (sdk_->get_now_current(joint_id, &current) != lhplib::LER_NONE) {
+        current = 0;
+      }
+
+      int status = -1;
+      if (sdk_->get_now_status(joint_id, &status) != lhplib::LER_NONE) {
+        status = -1;
+      }
+
+      int alarm = 0;
+      if (sdk_->get_now_alarm(joint_id, &alarm) != lhplib::LER_NONE) {
+        alarm = 0;
+      }
+
+      msg.joint_ids.push_back(joint_id);
+      msg.angles.push_back(static_cast<double>(angle));
+      msg.angular_velocities.push_back(static_cast<double>(angular_velocity));
+      msg.positions.push_back(position);
+      msg.position_velocities.push_back(position_velocity);
+      msg.currents.push_back(static_cast<double>(current));
+      msg.statuses.push_back(status);
+      msg.alarms.push_back(alarm);
+    }
+
+    return true;
+  }
+
   void close() {
     if (!sdk_) return;
-    std::lock_guard<std::mutex> lock(sdk_mutex_);
     sdk_->close();
     initialized_ = false;
   }
@@ -346,6 +458,30 @@ class HandDevice {
   bool isBusAlive() const;
 
  private:
+  int readNowAngleLocked(int joint_id, float* angle, bool* from_cache) {
+    float value = 0.0f;
+    const int result = sdk_->get_now_angle(joint_id, &value);
+    if (result == lhplib::LER_NONE && std::isfinite(value)) {
+      *angle = value;
+      if (joint_id >= 0 &&
+          joint_id < static_cast<int>(last_now_angles_.size())) {
+        last_now_angles_[joint_id] = value;
+        has_last_now_angle_[joint_id] = true;
+      }
+      return result;
+    }
+
+    if (joint_id >= 0 &&
+        joint_id < static_cast<int>(last_now_angles_.size()) &&
+        has_last_now_angle_[joint_id]) {
+      *angle = last_now_angles_[joint_id];
+      if (from_cache) *from_cache = true;
+      return result;
+    }
+
+    *angle = 0.0f;
+    return result;
+  }
   std::string name_;
   std::string bus_name_;
   int address_;
@@ -355,7 +491,8 @@ class HandDevice {
   std::shared_ptr<lhplib::LHandProLib> sdk_;
   std::weak_ptr<BusBase> bus_;
   std::atomic<bool> initialized_{false};
-  std::mutex sdk_mutex_;
+  std::vector<float> last_now_angles_;
+  std::vector<bool> has_last_now_angle_;
   std::function<bool(unsigned int, const unsigned char*, unsigned int, int)>
       canfd_send_function_;
   std::function<bool(const unsigned char*, unsigned int)> rs485_send_function_;
@@ -664,11 +801,14 @@ struct HandControlService::Impl {
     startBuses();
     attachHands();
     registerAllServices();
+    registerRealtimeStatePublishers();
     reconnect_timer_ = node_->create_wall_timer(
         std::chrono::seconds(5), [this]() { checkAndReconnect(); });
   }
 
   ~Impl() {
+    realtime_state_timer_.reset();
+    realtime_state_publishers_.clear();
     services_.clear();
     hands_.clear();
     for (auto& item : buses_) {
@@ -678,6 +818,13 @@ struct HandControlService::Impl {
   }
 
   rclcpp::Logger logger() const { return node_->get_logger(); }
+
+  using HandJointState = lhandpro_interfaces::msg::HandJointState;
+
+  struct RealtimeStatePublisher {
+    std::shared_ptr<HandDevice> hand;
+    rclcpp::Publisher<HandJointState>::SharedPtr publisher;
+  };
 
   void loadConfig() {
     const std::string default_type = defaultBusType();
@@ -696,6 +843,10 @@ struct HandControlService::Impl {
         node_->declare_parameter<bool>("compat_single_hand_services", true);
     default_hand_name_ =
         node_->declare_parameter<std::string>("default_hand", hand_names_[0]);
+    publish_realtime_state_ =
+        node_->declare_parameter<bool>("publish_realtime_state", true);
+    realtime_state_publish_rate_hz_ = node_->declare_parameter<double>(
+        "realtime_state_publish_rate_hz", 100.0);
 
     for (const auto& bus_name : bus_names_) {
       BusConfig cfg;
@@ -878,6 +1029,62 @@ struct HandControlService::Impl {
     }
   }
 
+  void registerRealtimeStatePublishers() {
+    if (!publish_realtime_state_) {
+      RCLCPP_INFO(logger(), "实时状态话题发布已关闭");
+      return;
+    }
+
+    for (const auto& item : hands_) {
+      addRealtimeStatePublisher(item.second, item.second->name());
+    }
+
+    auto default_it = hands_.find(default_hand_name_);
+    if (compat_single_hand_services_ && default_it != hands_.end()) {
+      addRealtimeStatePublisher(default_it->second, "");
+      RCLCPP_INFO(logger(), "已注册兼容实时状态话题，默认手: %s",
+                  default_hand_name_.c_str());
+    }
+
+    if (realtime_state_publishers_.empty()) return;
+
+    if (realtime_state_publish_rate_hz_ <= 0.0) {
+      realtime_state_publish_rate_hz_ = 100.0;
+    }
+
+    const auto period = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::duration<double>(1.0 / realtime_state_publish_rate_hz_));
+    realtime_state_timer_ = node_->create_wall_timer(
+        period, [this]() { publishRealtimeStates(); });
+    RCLCPP_INFO(logger(), "实时状态话题发布频率: %.1f Hz",
+                realtime_state_publish_rate_hz_);
+  }
+
+  void addRealtimeStatePublisher(const std::shared_ptr<HandDevice>& hand,
+                                 const std::string& prefix) {
+    const std::string topic_name =
+        serviceName(prefix, TOPIC_NAME_REALTIME_STATE);
+    auto publisher = node_->create_publisher<HandJointState>(
+        topic_name, rclcpp::QoS(10));
+    realtime_state_publishers_.push_back({hand, publisher});
+    RCLCPP_INFO(logger(), "[%s] 实时状态话题: %s", hand->name().c_str(),
+                topic_name.c_str());
+  }
+
+  void publishRealtimeStates() {
+    for (const auto& item : realtime_state_publishers_) {
+      const auto& hand = item.hand;
+      if (!hand || !hand->isInitialized() || !hand->isBusAlive()) continue;
+
+      HandJointState msg;
+      msg.header.stamp = node_->now();
+      msg.header.frame_id = hand->name();
+      if (hand->readRealtimeState(msg)) {
+        item.publisher->publish(msg);
+      }
+    }
+  }
+
   void registerServicesForHand(const std::shared_ptr<HandDevice>& hand,
                                const std::string& prefix) {
     using namespace lhandpro_interfaces::srv;
@@ -910,7 +1117,7 @@ struct HandControlService::Impl {
             return;
           }
           int value = 0;
-          h->sdk()->get_now_alarm(req->joint_id, &value);
+          h->readNowAlarm(req->joint_id, &value);
           res->alarm = value;
         });
     addService<SetClearAlarm>(
@@ -993,7 +1200,16 @@ struct HandControlService::Impl {
             return;
           }
           float value = 0.0f;
-          h->sdk()->get_now_angle(req->joint_id, &value);
+          bool from_cache = false;
+          const int result =
+              h->readNowAngle(req->joint_id, &value, &from_cache);
+          if (result != lhplib::LER_NONE) {
+            RCLCPP_WARN_THROTTLE(
+                logger(), *node_->get_clock(), 2000,
+                "[%s] get_now_angle joint=%d 读取失败: %d%s",
+                h->name().c_str(), req->joint_id, result,
+                from_cache ? "，使用上一帧有效角度" : "");
+          }
           res->angle = value;
         });
     addService<GetNowAngularVelocity>(
@@ -1005,7 +1221,7 @@ struct HandControlService::Impl {
             return;
           }
           float value = 0.0f;
-          h->sdk()->get_now_angular_velocity(req->joint_id, &value);
+          h->readNowAngularVelocity(req->joint_id, &value);
           res->velocity = value;
         });
     addService<GetNowPosition>(
@@ -1016,7 +1232,7 @@ struct HandControlService::Impl {
             return;
           }
           int value = 0;
-          h->sdk()->get_now_position(req->joint_id, &value);
+          h->readNowPosition(req->joint_id, &value);
           res->position = value;
         });
     addService<GetNowPositionVelocity>(
@@ -1028,7 +1244,7 @@ struct HandControlService::Impl {
             return;
           }
           int value = 0;
-          h->sdk()->get_now_position_velocity(req->joint_id, &value);
+          h->readNowPositionVelocity(req->joint_id, &value);
           res->velocity = value;
         });
     addService<GetNowCurrent>(
@@ -1039,7 +1255,7 @@ struct HandControlService::Impl {
             return;
           }
           int value = 0;
-          h->sdk()->get_now_current(req->joint_id, &value);
+          h->readNowCurrent(req->joint_id, &value);
           res->current = static_cast<float>(value);
         });
     addService<GetNowStatus>(
@@ -1050,7 +1266,7 @@ struct HandControlService::Impl {
             return;
           }
           int value = 0;
-          h->sdk()->get_now_status(req->joint_id, &value);
+          h->readNowStatus(req->joint_id, &value);
           res->status = value;
         });
     addService<GetPositionVelocity>(
@@ -1418,12 +1634,16 @@ struct HandControlService::Impl {
   std::vector<std::string> hand_names_;
   std::string default_hand_name_;
   bool compat_single_hand_services_{true};
+  bool publish_realtime_state_{true};
+  double realtime_state_publish_rate_hz_{100.0};
   std::unordered_map<std::string, BusConfig> bus_configs_;
   std::unordered_map<std::string, HandConfig> hand_configs_;
   std::unordered_map<std::string, std::shared_ptr<BusBase>> buses_;
   std::unordered_map<std::string, std::shared_ptr<HandDevice>> hands_;
   std::vector<rclcpp::ServiceBase::SharedPtr> services_;
+  std::vector<RealtimeStatePublisher> realtime_state_publishers_;
   rclcpp::TimerBase::SharedPtr reconnect_timer_;
+  rclcpp::TimerBase::SharedPtr realtime_state_timer_;
 };
 
 HandControlService::HandControlService() : Node("lhandpro_service") {

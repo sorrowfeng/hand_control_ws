@@ -6,6 +6,8 @@
     hand_names: [hand]
     default_hand: hand
     compat_single_hand_services: true
+    publish_realtime_state: true
+    realtime_state_publish_rate_hz: 100.0
 
     buses:
       bus0:
