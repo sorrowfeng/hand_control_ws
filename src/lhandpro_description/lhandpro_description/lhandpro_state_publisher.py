@@ -34,6 +34,7 @@ class LHandProStatePublisher(Node):
             'finger51', 'finger52', 'finger53',
         ]
         self.joint_positions = [0.0] * len(self.joint_names)
+        self.has_state = False
         self.map_index = {
             1: 'finger11',
             2: 'finger12',
@@ -65,6 +66,7 @@ class LHandProStatePublisher(Node):
             if joint_name is None:
                 continue
             self.update_joint_angle(joint_name, math.radians(float(angle_deg)))
+        self.has_state = True
 
     def update_joint_angle(self, joint_name, angle_rad):
         idx = self.joint_names.index(joint_name)
@@ -76,10 +78,13 @@ class LHandProStatePublisher(Node):
                 self.joint_positions[dep_idx] = angle_rad * ratio
 
     def publish_joint_state(self):
+        if not self.has_state:
+            return
+
         msg = JointState()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.name = self.joint_names
-        msg.position = self.joint_positions
+        msg.position = list(self.joint_positions)
         msg.velocity = []
         msg.effort = []
 

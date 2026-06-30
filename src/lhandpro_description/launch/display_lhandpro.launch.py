@@ -66,7 +66,11 @@ def _launch_setup(context, *args, **kwargs):
     action_robot_state_publisher = launch_ros.actions.Node(
         package='robot_state_publisher',
         executable='robot_state_publisher',
-        parameters=[{'robot_description': robot_description_value}],
+        parameters=[{
+            'robot_description': robot_description_value,
+            'publish_frequency': 100.0,
+            'ignore_timestamp': True,
+        }],
         output='screen',
         emulate_tty=True
     )

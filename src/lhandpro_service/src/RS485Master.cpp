@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cctype>
 #include <cstring>
 #include <iostream>
 #include <utility>
@@ -214,6 +215,48 @@ void appendPorts(const char* pattern, std::vector<std::string>* ports) {
   globfree(&glob_result);
 }
 
+bool isVirtualConsoleTty(const std::string& port) {
+  const auto pos = port.find_last_of('/');
+  const std::string name =
+      pos == std::string::npos ? port : port.substr(pos + 1);
+  if (name == "tty" || name == "ttyprintk") {
+    return true;
+  }
+  if (name.size() <= 3 || name.rfind("tty", 0) != 0) {
+    return false;
+  }
+  return std::all_of(name.begin() + 3, name.end(), [](unsigned char ch) {
+    return std::isdigit(ch) != 0;
+  });
+}
+
+bool isStandardTtyS(const std::string& port) {
+  const auto pos = port.find_last_of('/');
+  const std::string name =
+      pos == std::string::npos ? port : port.substr(pos + 1);
+  return name.size() > 4 && name.rfind("ttyS", 0) == 0 &&
+         std::isdigit(static_cast<unsigned char>(name[4])) != 0;
+}
+
+void appendFallbackTtyPorts(std::vector<std::string>* ports) {
+  glob_t glob_result = {};
+  if (glob("/dev/tty*", 0, nullptr, &glob_result) != 0) {
+    globfree(&glob_result);
+    return;
+  }
+
+  for (size_t i = 0; i < glob_result.gl_pathc; ++i) {
+    std::string port = glob_result.gl_pathv[i];
+    if (isVirtualConsoleTty(port) || isStandardTtyS(port)) {
+      continue;
+    }
+    if (std::find(ports->begin(), ports->end(), port) == ports->end()) {
+      ports->push_back(port);
+    }
+  }
+  globfree(&glob_result);
+}
+
 }  // namespace
 
 RS485Master::RS485Master()
@@ -227,8 +270,20 @@ RS485Master::~RS485Master() { disconnect(); }
 
 std::vector<std::string> RS485Master::scanDevices() {
   std::vector<std::string> ports;
+  appendPorts("/dev/ttyXR*", &ports);
   appendPorts("/dev/ttyUSB*", &ports);
   appendPorts("/dev/ttyACM*", &ports);
+  appendPorts("/dev/ttyAMA*", &ports);
+  appendPorts("/dev/ttyTHS*", &ports);
+  appendPorts("/dev/ttyO*", &ports);
+  appendPorts("/dev/ttySAC*", &ports);
+  appendPorts("/dev/ttySC*", &ports);
+  appendPorts("/dev/ttymxc*", &ports);
+  appendPorts("/dev/ttyUL*", &ports);
+  appendPorts("/dev/ttyPS*", &ports);
+  appendPorts("/dev/ttyMSM*", &ports);
+  appendPorts("/dev/ttyHS*", &ports);
+  appendFallbackTtyPorts(&ports);
   appendPorts("/dev/ttyS*", &ports);
   return ports;
 }
