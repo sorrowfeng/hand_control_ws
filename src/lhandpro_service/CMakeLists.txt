@@ -26,7 +26,11 @@ endif()
  
 # 设置第三方库路径
 set(THIRDPARTY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty)
-find_library(LHANDPRO_LIB NAMES LHandProLib PATHS ${THIRDPARTY_DIR}/lib REQUIRED)
+find_library(LHANDPRO_LIB NAMES LHandProLib
+  PATHS ${THIRDPARTY_DIR}/lib
+  REQUIRED
+  NO_DEFAULT_PATH
+)
 set(HCANBUS_ROOT "" CACHE PATH "Path to HCanbus SDK root containing include and lib directories")
 option(LHANDPRO_USE_LIBCANBUS "Use libcanbus backend on Linux instead of SocketCAN" OFF)
 # 导出该库给其他包使用
