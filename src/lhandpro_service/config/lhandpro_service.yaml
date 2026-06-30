@@ -19,7 +19,7 @@
       hand:
         bus: bus0
         address: 1
-        hand_type: LAC_DOF_6
+        hand_type: LAC_DOF_6_S
 
 # See lhandpro_two_hands_same_bus.yaml and lhandpro_two_hands_two_buses.yaml
 # for complete two-hand examples.
