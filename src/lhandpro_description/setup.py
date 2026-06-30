@@ -33,7 +33,7 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-    ] + collect_data_files('config', 'launch', 'meshes', 'urdf', 'models'),
+    ] + collect_data_files('config', 'launch', 'models'),
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='sorrowfeng',
