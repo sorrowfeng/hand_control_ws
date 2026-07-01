@@ -1,0 +1,64 @@
+{
+  "vendors": {
+    "lhandpro": {
+      "display_name": "LHandPro",
+      "package_name": "hand_control_ws_lhandpro",
+      "active_model": "DH116S-L000-A1",
+      "models": [
+        "DH116-L000-A1",
+        "DH116-R000-A1",
+        "DH116S-L000-A1",
+        "DH116S-R000-A1"
+      ],
+      "sdk": {
+        "lib_name": "LHandProLib",
+        "header": "LHandProLib/LHandProLib.hpp",
+        "namespace": "lhplib",
+        "class": "LHandProLib",
+        "include_dir": "LHandProLib",
+        "libs": [
+          "libLHandProLib.so",
+          "libLHandProLibd.so"
+        ]
+      },
+      "common_thirdparty_dirs": [
+        "share/libcanbus"
+      ],
+      "forbidden": [
+        "Lumi-Dex",
+        "LumiDex11SLib",
+        "LumiBot"
+      ]
+    },
+    "lumibot": {
+      "display_name": "LumiBot",
+      "package_name": "hand_control_ws_lumibot",
+      "active_model": "Lumi-Dex-11S-L000-A1",
+      "models": [
+        "Lumi-Dex-11-L000-A1",
+        "Lumi-Dex-11-R000-A1",
+        "Lumi-Dex-11S-L000-A1",
+        "Lumi-Dex-11S-R000-A1"
+      ],
+      "sdk": {
+        "lib_name": "LumiDex11SLib",
+        "header": "LumiDex11SLib/LumiDex11SLib.hpp",
+        "namespace": "lumidex",
+        "class": "LumiDex11SLib",
+        "include_dir": "LumiDex11SLib",
+        "libs": [
+          "libLumiDex11SLib.so",
+          "libLumiDex11SLibd.so"
+        ]
+      },
+      "common_thirdparty_dirs": [
+        "share/libcanbus"
+      ],
+      "forbidden": [
+        "DH116",
+        "LHandProLib",
+        "lhplib"
+      ]
+    }
+  }
+}

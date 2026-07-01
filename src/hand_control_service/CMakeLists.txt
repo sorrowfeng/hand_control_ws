@@ -23,12 +23,38 @@ if(BUILD_TESTING)
 endif()
 
 
-# 设置第三方库路径
-set(THIRDPARTY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty)
-set(HC_SDK_LIB_NAME "LHandProLib" CACHE STRING "SDK library name to link")
-set(HC_SDK_HEADER "LHandProLib/LHandProLib.hpp" CACHE STRING "SDK C++ header included by the service wrapper")
-set(HC_SDK_NS "lhplib" CACHE STRING "SDK C++ namespace used by the service wrapper")
-set(HC_SDK_CLASS "LHandProLib" CACHE STRING "SDK C++ class used by the service wrapper")
+# Third-party SDK settings can be provided by a generated customer profile.
+set(HAND_CONTROL_THIRDPARTY_DIR
+  "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty"
+  CACHE PATH "Path to the selected customer thirdparty SDK directory"
+)
+set(HAND_CONTROL_SDK_PROFILE
+  "${CMAKE_CURRENT_SOURCE_DIR}/config/sdk_profile.cmake"
+  CACHE FILEPATH "Path to the selected customer SDK profile"
+)
+
+set(HC_SDK_LIB_NAME "" CACHE STRING "SDK library name to link")
+set(HC_SDK_HEADER "" CACHE STRING "SDK C++ header included by the service wrapper")
+set(HC_SDK_NS "" CACHE STRING "SDK C++ namespace used by the service wrapper")
+set(HC_SDK_CLASS "" CACHE STRING "SDK C++ class used by the service wrapper")
+
+if(EXISTS "${HAND_CONTROL_SDK_PROFILE}")
+  include("${HAND_CONTROL_SDK_PROFILE}")
+endif()
+
+foreach(required_sdk_setting
+    HC_SDK_LIB_NAME
+    HC_SDK_HEADER
+    HC_SDK_NS
+    HC_SDK_CLASS)
+  if(NOT ${required_sdk_setting})
+    message(FATAL_ERROR
+      "${required_sdk_setting} is not set. Provide ${HAND_CONTROL_SDK_PROFILE} "
+      "or pass -D${required_sdk_setting}=...")
+  endif()
+endforeach()
+
+set(THIRDPARTY_DIR "${HAND_CONTROL_THIRDPARTY_DIR}")
 
 find_library(HAND_CONTROL_SDK_LIB NAMES ${HC_SDK_LIB_NAME}
   PATHS ${THIRDPARTY_DIR}/lib
