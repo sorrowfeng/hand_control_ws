@@ -36,7 +36,7 @@ find_library(HAND_CONTROL_SDK_LIB NAMES ${HC_SDK_LIB_NAME}
   NO_DEFAULT_PATH
 )
 set(HCANBUS_ROOT "" CACHE PATH "Path to HCanbus SDK root containing include and lib directories")
-option(HAND_CONTROL_USE_LIBCANBUS "Use libcanbus backend on Linux instead of SocketCAN" ON)
+option(HAND_CONTROL_USE_LIBCANBUS "Use libcanbus backend on Linux instead of SocketCAN" OFF)
 # 导出该库给其他包使用
 ament_export_libraries(${HAND_CONTROL_SDK_LIB})
 ament_export_include_directories(${THIRDPARTY_DIR}/include)

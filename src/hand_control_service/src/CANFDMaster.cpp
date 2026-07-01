@@ -214,7 +214,7 @@ void CANFDMaster::resetLostFrames() { lost_frames_ = 0; }
 
 #else
 
-// Linux backend: libcanbus by default, or SocketCAN when USE_LIBCANBUS is not set.
+// Linux backend: SocketCAN by default, or libcanbus when USE_LIBCANBUS is set.
 #include <dirent.h>
 #ifdef USE_LIBCANBUS
 #include <dlfcn.h>

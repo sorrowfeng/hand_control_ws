@@ -80,7 +80,7 @@ sudo apt install -y \
   ros-humble-rviz2
 ```
 
-如果需要关闭默认的 libcanbus 后端并改用 SocketCAN，可安装常用工具：
+CANFD SocketCAN 常用工具：
 
 ```bash
 sudo apt install -y can-utils
@@ -138,7 +138,7 @@ sudo ldconfig
 
 ## 权限配置
 
-默认 libcanbus 后端需要系统可加载 `libcanbus.so` 及其依赖。如果关闭 libcanbus 并改用 SocketCAN，服务需要操作 CAN 网络接口；不希望每次用 `sudo` 运行服务时，可给服务可执行文件添加能力：
+SocketCAN 方式需要操作 CAN 网络接口。如果不希望每次用 `sudo` 运行服务，可给服务可执行文件添加能力：
 
 ```bash
 sudo setcap cap_net_raw,cap_net_admin+ep \
@@ -229,7 +229,7 @@ ros2 launch hand_control_service service.launch.py \
 
 ### CANFD
 
-Linux 默认使用 libcanbus 后端，扫描 libcanbus 可见的 CANFD 设备，`channel` 对应扫描到的设备索引。
+Linux 默认使用 SocketCAN 后端，扫描 `/sys/class/net` 下以 `can` 开头的接口，例如 `can0`、`can1`。
 
 ```yaml
 buses:
@@ -242,11 +242,11 @@ buses:
 
 服务启动时会按配置设置 CANFD 波特率。这里的 `canfd_arb_baudrate` 和 `canfd_data_baudrate` 直接使用 SDK 元数据值，不再额外乘以 1000。
 
-如需切回 SocketCAN 后端，构建时关闭 `HAND_CONTROL_USE_LIBCANBUS`。SocketCAN 会扫描 `/sys/class/net` 下以 `can` 开头的接口，例如 `can0`、`can1`：
+如需使用 `libcanbus` 后端，构建时打开：
 
 ```bash
 colcon build --packages-select hand_control_service \
-  --cmake-args -DHAND_CONTROL_USE_LIBCANBUS=OFF
+  --cmake-args -DHAND_CONTROL_USE_LIBCANBUS=ON
 ```
 
 ### RS485

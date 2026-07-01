@@ -125,7 +125,7 @@ export LD_LIBRARY_PATH=$PWD/install/hand_control_service/lib:$LD_LIBRARY_PATH
 
 ## 权限
 
-默认 libcanbus 后端需要系统可加载 `libcanbus.so` 及其依赖。若关闭 libcanbus 并改用 SocketCAN，CANFD 通常需要网络 raw 权限：
+CANFD SocketCAN 方式通常需要网络 raw 权限：
 
 ```bash
 sudo setcap cap_net_raw,cap_net_admin+ep \
@@ -194,11 +194,11 @@ buses:
 
 `canfd_arb_baudrate` 和 `canfd_data_baudrate` 直接传入 SDK，不再额外乘以 1000。
 
-Linux 默认使用 libcanbus；构建时关闭 `HAND_CONTROL_USE_LIBCANBUS` 可切换到 SocketCAN 后端：
+Linux 默认使用 SocketCAN；构建时启用 `HAND_CONTROL_USE_LIBCANBUS` 可切换到 libcanbus 后端：
 
 ```bash
 colcon build --packages-select hand_control_service \
-  --cmake-args -DHAND_CONTROL_USE_LIBCANBUS=OFF
+  --cmake-args -DHAND_CONTROL_USE_LIBCANBUS=ON
 ```
 
 ### RS485
@@ -487,7 +487,7 @@ ros2 topic info -v /joint_states
 
 - CAN 设备是否能被扫描到。
 - `channel` 是否是正确的设备索引。
-- 默认 libcanbus 后端下，系统是否可加载 `libcanbus.so` 及其依赖；SocketCAN 后端下，是否具备网络权限。
+- 是否具备 SocketCAN 权限或 libcanbus 依赖。
 - 波特率配置是否和设备一致。
 
 ### RS485 找不到设备
