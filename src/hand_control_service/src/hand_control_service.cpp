@@ -1,6 +1,6 @@
 #include "hand_control_service.hpp"
 
-#include <LHandProLib/LHandProLib.hpp>
+#include "sdk_adapter.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -89,8 +89,9 @@
 #ifndef RS485_BAUDRATE
 #define RS485_BAUDRATE 500000
 #endif
+
 #ifndef HAND_TYPE
-#define HAND_TYPE lhplib::LAC_DOF_6
+#define HAND_TYPE HC_SDK_NS::LAC_DOF_6
 #endif
 
 namespace {
@@ -211,13 +212,13 @@ int defaultAddressForType(BusType type) {
 int parseHandType(const std::string& value) {
   const std::string type = toLower(value);
   if (type == "lac_dof_6" || type == "dof_6") {
-    return lhplib::LAC_DOF_6;
+    return HC_SDK_NS::LAC_DOF_6;
   }
   if (type == "lac_dof_6_s" || type == "dof_6_s") {
-    return lhplib::LAC_DOF_6_S;
+    return HC_SDK_NS::LAC_DOF_6_S;
   }
   if (type == "lac_dof_16" || type == "dof_16") {
-    return lhplib::LAC_DOF_16;
+    return HC_SDK_NS::LAC_DOF_16;
   }
   try {
     return std::stoi(value);
@@ -251,7 +252,7 @@ class HandDevice {
         bus_name_(std::move(config.bus_name)),
         address_(config.address),
         hand_type_(config.hand_type),
-        sdk_(std::make_shared<lhplib::LHandProLib>()) {}
+        sdk_(std::make_shared<HC_SDK_NS::HC_SDK_CLASS>()) {}
 
   ~HandDevice() { close(); }
 
@@ -261,7 +262,7 @@ class HandDevice {
   int handType() const { return hand_type_; }
   int activeDof() const { return active_dof_; }
   BusType busType() const { return bus_type_; }
-  std::shared_ptr<lhplib::LHandProLib> sdk() const { return sdk_; }
+  std::shared_ptr<HC_SDK_NS::HC_SDK_CLASS> sdk() const { return sdk_; }
   void setBus(const std::shared_ptr<BusBase>& bus, BusType type) {
     bus_ = bus;
     bus_type_ = type;
@@ -291,18 +292,18 @@ class HandDevice {
   bool initialize(BusType type, rclcpp::Logger logger) {
     sdk_->set_hand_type(hand_type_);
 
-    int result = lhplib::LER_NONE;
+    int result = HC_SDK_NS::LER_NONE;
     if (type == BusType::Ethercat) {
-      result = sdk_->initial(lhplib::LCN_ECAT);
+      result = sdk_->initial(HC_SDK_NS::LCN_ECAT);
     } else if (type == BusType::Canfd) {
-      result = sdk_->initial(lhplib::LCN_CANFD,
+      result = sdk_->initial(HC_SDK_NS::LCN_CANFD,
                              static_cast<unsigned int>(address_));
     } else {
-      result = sdk_->initial(lhplib::LCN_RS485,
+      result = sdk_->initial(HC_SDK_NS::LCN_RS485,
                              static_cast<unsigned int>(address_));
     }
 
-    if (result != lhplib::LER_NONE) {
+    if (result != HC_SDK_NS::LER_NONE) {
       RCLCPP_ERROR(logger, "[%s] 设备 SDK 初始化失败: %d", name_.c_str(),
                    result);
       initialized_ = false;
@@ -337,39 +338,39 @@ class HandDevice {
   }
 
   int readNowAngle(int joint_id, float* angle, bool* from_cache) {
-    if (!angle) return lhplib::LER_UNKNOWN;
+    if (!angle) return HC_SDK_NS::LER_UNKNOWN;
     if (from_cache) *from_cache = false;
 
     return readNowAngleLocked(joint_id, angle, from_cache);
   }
 
   int readNowAngularVelocity(int joint_id, float* velocity) {
-    if (!velocity) return lhplib::LER_UNKNOWN;
+    if (!velocity) return HC_SDK_NS::LER_UNKNOWN;
     return sdk_->get_now_angular_velocity(joint_id, velocity);
   }
 
   int readNowPosition(int joint_id, int* position) {
-    if (!position) return lhplib::LER_UNKNOWN;
+    if (!position) return HC_SDK_NS::LER_UNKNOWN;
     return sdk_->get_now_position(joint_id, position);
   }
 
   int readNowPositionVelocity(int joint_id, int* velocity) {
-    if (!velocity) return lhplib::LER_UNKNOWN;
+    if (!velocity) return HC_SDK_NS::LER_UNKNOWN;
     return sdk_->get_now_position_velocity(joint_id, velocity);
   }
 
   int readNowCurrent(int joint_id, int* current) {
-    if (!current) return lhplib::LER_UNKNOWN;
+    if (!current) return HC_SDK_NS::LER_UNKNOWN;
     return sdk_->get_now_current(joint_id, current);
   }
 
   int readNowStatus(int joint_id, int* status) {
-    if (!status) return lhplib::LER_UNKNOWN;
+    if (!status) return HC_SDK_NS::LER_UNKNOWN;
     return sdk_->get_now_status(joint_id, status);
   }
 
   int readNowAlarm(int joint_id, int* alarm) {
-    if (!alarm) return lhplib::LER_UNKNOWN;
+    if (!alarm) return HC_SDK_NS::LER_UNKNOWN;
     return sdk_->get_now_alarm(joint_id, alarm);
   }
 
@@ -404,33 +405,37 @@ class HandDevice {
 
       float angular_velocity = 0.0f;
       if (sdk_->get_now_angular_velocity(joint_id, &angular_velocity) !=
-          lhplib::LER_NONE) {
+          HC_SDK_NS::LER_NONE) {
         angular_velocity = 0.0f;
       }
 
       int position = 0;
-      if (sdk_->get_now_position(joint_id, &position) != lhplib::LER_NONE) {
+      if (sdk_->get_now_position(joint_id, &position) !=
+          HC_SDK_NS::LER_NONE) {
         position = 0;
       }
 
       int position_velocity = 0;
       if (sdk_->get_now_position_velocity(joint_id, &position_velocity) !=
-          lhplib::LER_NONE) {
+          HC_SDK_NS::LER_NONE) {
         position_velocity = 0;
       }
 
       int current = 0;
-      if (sdk_->get_now_current(joint_id, &current) != lhplib::LER_NONE) {
+      if (sdk_->get_now_current(joint_id, &current) !=
+          HC_SDK_NS::LER_NONE) {
         current = 0;
       }
 
       int status = -1;
-      if (sdk_->get_now_status(joint_id, &status) != lhplib::LER_NONE) {
+      if (sdk_->get_now_status(joint_id, &status) !=
+          HC_SDK_NS::LER_NONE) {
         status = -1;
       }
 
       int alarm = 0;
-      if (sdk_->get_now_alarm(joint_id, &alarm) != lhplib::LER_NONE) {
+      if (sdk_->get_now_alarm(joint_id, &alarm) !=
+          HC_SDK_NS::LER_NONE) {
         alarm = 0;
       }
 
@@ -461,7 +466,7 @@ class HandDevice {
   int readNowAngleLocked(int joint_id, float* angle, bool* from_cache) {
     float value = 0.0f;
     const int result = sdk_->get_now_angle(joint_id, &value);
-    if (result == lhplib::LER_NONE && std::isfinite(value)) {
+    if (result == HC_SDK_NS::LER_NONE && std::isfinite(value)) {
       *angle = value;
       if (joint_id >= 0 &&
           joint_id < static_cast<int>(last_now_angles_.size())) {
@@ -488,7 +493,7 @@ class HandDevice {
   int hand_type_;
   int active_dof_{0};
   BusType bus_type_{BusType::Canfd};
-  std::shared_ptr<lhplib::LHandProLib> sdk_;
+  std::shared_ptr<HC_SDK_NS::HC_SDK_CLASS> sdk_;
   std::weak_ptr<BusBase> bus_;
   std::atomic<bool> initialized_{false};
   std::vector<float> last_now_angles_;
@@ -1203,7 +1208,7 @@ struct HandControlService::Impl {
           bool from_cache = false;
           const int result =
               h->readNowAngle(req->joint_id, &value, &from_cache);
-          if (result != lhplib::LER_NONE) {
+          if (result != HC_SDK_NS::LER_NONE) {
             RCLCPP_WARN_THROTTLE(
                 logger(), *node_->get_clock(), 2000,
                 "[%s] get_now_angle joint=%d 读取失败: %d%s",

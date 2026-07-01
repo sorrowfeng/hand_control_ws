@@ -23,10 +23,14 @@ if(BUILD_TESTING)
 endif()
 
 
- 
 # 设置第三方库路径
 set(THIRDPARTY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty)
-find_library(HAND_CONTROL_SDK_LIB NAMES LHandProLib
+set(HC_SDK_LIB_NAME "LHandProLib" CACHE STRING "SDK library name to link")
+set(HC_SDK_HEADER "LHandProLib/LHandProLib.hpp" CACHE STRING "SDK C++ header included by the service wrapper")
+set(HC_SDK_NS "lhplib" CACHE STRING "SDK C++ namespace used by the service wrapper")
+set(HC_SDK_CLASS "LHandProLib" CACHE STRING "SDK C++ class used by the service wrapper")
+
+find_library(HAND_CONTROL_SDK_LIB NAMES ${HC_SDK_LIB_NAME}
   PATHS ${THIRDPARTY_DIR}/lib
   REQUIRED
   NO_DEFAULT_PATH
@@ -36,6 +40,13 @@ option(HAND_CONTROL_USE_LIBCANBUS "Use libcanbus backend on Linux instead of Soc
 # 导出该库给其他包使用
 ament_export_libraries(${HAND_CONTROL_SDK_LIB})
 ament_export_include_directories(${THIRDPARTY_DIR}/include)
+
+set(SDK_ADAPTER_INCLUDE_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated)
+configure_file(
+  cmake/sdk_adapter.hpp.in
+  ${SDK_ADAPTER_INCLUDE_DIR}/sdk_adapter.hpp
+  @ONLY
+)
 
 
 add_subdirectory(src/SOEM)
@@ -56,6 +67,13 @@ ament_target_dependencies(hand_control_service rclcpp hand_control_interfaces)
 target_link_libraries(hand_control_service ${HAND_CONTROL_SDK_LIB} soem)
 target_include_directories(hand_control_service PUBLIC
     $<BUILD_INTERFACE:${THIRDPARTY_DIR}/include>
+)
+target_include_directories(hand_control_service PRIVATE
+    ${SDK_ADAPTER_INCLUDE_DIR}
+)
+target_compile_definitions(hand_control_service PRIVATE
+  "HC_SDK_NS=${HC_SDK_NS}"
+  "HC_SDK_CLASS=${HC_SDK_CLASS}"
 )
 
 if(WIN32)
