@@ -17,7 +17,7 @@ setup(
     zip_safe=True,
     maintainer='plf',
     maintainer_email='1399600304@qq.com',
-    description='TODO: Package description',
+    description='Hand control Python sequence demo',
     license='Apache-2.0',
     tests_require=['pytest'],
     entry_points={

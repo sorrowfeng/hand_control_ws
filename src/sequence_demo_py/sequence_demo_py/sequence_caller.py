@@ -4,7 +4,7 @@ import os
 import time
 
 # 导入服务接口
-from lhandpro_interfaces.srv import SetEnable, SetPosition, SetPositionVelocity, MoveMotors, HomeMotors
+from hand_control_interfaces.srv import SetEnable, SetPosition, SetPositionVelocity, MoveMotors, HomeMotors
 
 
 class SequenceCallerClient(Node):

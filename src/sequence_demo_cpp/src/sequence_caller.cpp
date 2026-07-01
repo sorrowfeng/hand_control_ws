@@ -2,24 +2,24 @@
 #include <thread>
 #include <vector>
 
-#include "lhandpro_interfaces/srv/home_motors.hpp"
-#include "lhandpro_interfaces/srv/move_motors.hpp"
-#include "lhandpro_interfaces/srv/get_now_status.hpp"
-#include "lhandpro_interfaces/srv/set_enable.hpp"
-#include "lhandpro_interfaces/srv/set_position.hpp"
-#include "lhandpro_interfaces/srv/set_position_velocity.hpp"
+#include "hand_control_interfaces/srv/home_motors.hpp"
+#include "hand_control_interfaces/srv/move_motors.hpp"
+#include "hand_control_interfaces/srv/get_now_status.hpp"
+#include "hand_control_interfaces/srv/set_enable.hpp"
+#include "hand_control_interfaces/srv/set_position.hpp"
+#include "hand_control_interfaces/srv/set_position_velocity.hpp"
 #include "rclcpp/rclcpp.hpp"
 
 using namespace std::chrono_literals;
 
 class SequenceCaller : public rclcpp::Node {
  public:
-  using SetEnable = lhandpro_interfaces::srv::SetEnable;
-  using SetPosition = lhandpro_interfaces::srv::SetPosition;
-  using SetPositionVelocity = lhandpro_interfaces::srv::SetPositionVelocity;
-  using MoveMotors = lhandpro_interfaces::srv::MoveMotors;
-  using HomeMotors = lhandpro_interfaces::srv::HomeMotors;
-  using GetNowStatus = lhandpro_interfaces::srv::GetNowStatus;
+  using SetEnable = hand_control_interfaces::srv::SetEnable;
+  using SetPosition = hand_control_interfaces::srv::SetPosition;
+  using SetPositionVelocity = hand_control_interfaces::srv::SetPositionVelocity;
+  using MoveMotors = hand_control_interfaces::srv::MoveMotors;
+  using HomeMotors = hand_control_interfaces::srv::HomeMotors;
+  using GetNowStatus = hand_control_interfaces::srv::GetNowStatus;
 
   SequenceCaller() : Node("sequence_caller") {
     RCLCPP_INFO(this->get_logger(), "Sequence Caller 启动...");

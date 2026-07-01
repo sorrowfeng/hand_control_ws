@@ -9,7 +9,7 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(ament_index_cpp REQUIRED)
-find_package(lhandpro_interfaces REQUIRED)
+find_package(hand_control_interfaces REQUIRED)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
@@ -28,7 +28,7 @@ add_executable(sequence_caller src/sequence_caller.cpp)
 ament_target_dependencies(sequence_caller 
   rclcpp 
   ament_index_cpp
-  lhandpro_interfaces
+  hand_control_interfaces
 )
 
 # 安装可执行文件
