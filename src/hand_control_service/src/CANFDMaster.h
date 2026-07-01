@@ -9,9 +9,8 @@
 #include <vector>
 
 // Linux backend selection:
-// - default: SocketCAN
-// - define USE_LIBCANBUS to use the HCanbus-compatible libcanbus backend.
-//   CMake option: -DHAND_CONTROL_USE_LIBCANBUS=ON
+// - default: libcanbus via USE_LIBCANBUS
+// - pass -DHAND_CONTROL_USE_LIBCANBUS=OFF to use SocketCAN.
 
 using ReceiveCallback = std::function<void(
     uint32_t id, const std::vector<uint8_t>& data, uint64_t timestamp)>;

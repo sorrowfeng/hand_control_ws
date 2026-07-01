@@ -125,7 +125,7 @@ export LD_LIBRARY_PATH=$PWD/install/hand_control_service/lib:$LD_LIBRARY_PATH
 
 ## Permissions
 
-SocketCAN CANFD normally needs raw network capability:
+The default libcanbus backend requires `libcanbus.so` and its dependencies to be loadable by the system. If libcanbus is disabled and SocketCAN is used, CANFD normally needs raw network capability:
 
 ```bash
 sudo setcap cap_net_raw,cap_net_admin+ep \
@@ -194,11 +194,11 @@ buses:
 
 `canfd_arb_baudrate` and `canfd_data_baudrate` are passed directly to the SDK. They are not multiplied by 1000 in the ROS layer.
 
-Linux uses SocketCAN by default. Build with `HAND_CONTROL_USE_LIBCANBUS` to use the libcanbus backend:
+Linux uses libcanbus by default. Build with `HAND_CONTROL_USE_LIBCANBUS` disabled to use the SocketCAN backend:
 
 ```bash
 colcon build --packages-select hand_control_service \
-  --cmake-args -DHAND_CONTROL_USE_LIBCANBUS=ON
+  --cmake-args -DHAND_CONTROL_USE_LIBCANBUS=OFF
 ```
 
 ### RS485
@@ -487,7 +487,7 @@ Check:
 
 - The CAN device is detected.
 - `channel` points to the correct scanned device index.
-- SocketCAN capabilities or libcanbus dependencies are available.
+- For the default libcanbus backend, `libcanbus.so` and its dependencies are loadable; for SocketCAN, network capabilities are available.
 - Baudrate configuration matches the device.
 
 ### RS485 device is not found
