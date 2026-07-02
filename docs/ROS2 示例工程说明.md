@@ -192,8 +192,6 @@ buses:
     canfd_data_baudrate: 5000000
 ```
 
-`canfd_arb_baudrate` 和 `canfd_data_baudrate` 直接传入 SDK，不再额外乘以 1000。
-
 Linux 默认使用 SocketCAN；构建时启用 `HAND_CONTROL_USE_LIBCANBUS` 可切换到 libcanbus 后端：
 
 ```bash

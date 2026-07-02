@@ -192,8 +192,6 @@ buses:
     canfd_data_baudrate: 5000000
 ```
 
-`canfd_arb_baudrate` and `canfd_data_baudrate` are passed directly to the SDK. They are not multiplied by 1000 in the ROS layer.
-
 Linux uses SocketCAN by default. Build with `HAND_CONTROL_USE_LIBCANBUS` to use the libcanbus backend:
 
 ```bash
