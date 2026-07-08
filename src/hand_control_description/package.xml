@@ -4,7 +4,7 @@
   <name>hand_control_description</name>
   <version>1.0.0</version>
   <description>Hand model description package</description>
-  <maintainer email="1399600304@qq.com">plf</maintainer>
+  <maintainer email="maintainer@example.com">plf</maintainer>
   <license>Apache-2.0</license>
 
   <depend>rclpy</depend>

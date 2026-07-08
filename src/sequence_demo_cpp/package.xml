@@ -4,7 +4,7 @@
   <name>sequence_demo_cpp</name>
   <version>0.0.0</version>
   <description>Hand control C++ sequence demo</description>
-  <maintainer email="1399600304@qq.com">plf</maintainer>
+  <maintainer email="maintainer@example.com">plf</maintainer>
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>

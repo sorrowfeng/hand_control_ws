@@ -37,7 +37,7 @@ setup(
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='plf',
-    maintainer_email='1399600304@qq.com',
+    maintainer_email='maintainer@example.com',
     description='Model description project',
     license='Apache-2.0',
     tests_require=['pytest'],
