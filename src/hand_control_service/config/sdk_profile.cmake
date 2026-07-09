@@ -1,5 +1,4 @@
 # Default SDK profile for the in-repository development assets.
-# Customer delivery packages overwrite this file from packaging/vendors.json.
 
 if(NOT HC_SDK_LIB_NAME)
   set(HC_SDK_LIB_NAME "LHandProLib")

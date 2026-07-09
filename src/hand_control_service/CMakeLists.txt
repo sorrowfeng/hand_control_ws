@@ -23,7 +23,6 @@ if(BUILD_TESTING)
 endif()
 
 
-# Third-party SDK settings can be provided by a generated customer profile.
 set(HAND_CONTROL_THIRDPARTY_DIR
   "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty"
   CACHE PATH "Path to the selected customer thirdparty SDK directory"
