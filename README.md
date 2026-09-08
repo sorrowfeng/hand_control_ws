@@ -10,6 +10,7 @@
 - 不同总线相同或不同 ID 分别控制多只手。
 - EtherCAT 同一网卡不同从站，或不同网卡相同/不同从站。
 - 实时状态 topic 发布，用于位置、速度、电流、状态、报警等高频数据。
+- 触觉传感器 topic 发布，覆盖 11 个位点的压力、法向力、切向力、受力方向和接近觉（可选，默认关闭）。
 - RViz 模型显示，模型资源由 `hand_control_description/models` 管理。
 
 ## 目录结构
@@ -22,6 +23,8 @@ hand_control_ws/
     hand_control_description/  URDF/MJCF/mesh 模型和 RViz 显示节点
     sequence_demo_cpp/         C++ 动作序列示例
     sequence_demo_py/          Python 动作序列示例
+    tactile_demo_cpp/          C++ 触觉传感器自检示例
+    tactile_demo_py/           Python 触觉传感器自检示例
     ros2_hand_control.conf     可选的动态库路径配置示例
 ```
 
@@ -29,11 +32,13 @@ hand_control_ws/
 
 | 包 | 作用 |
 | --- | --- |
-| `hand_control_interfaces` | 定义服务接口和 `HandJointState` 实时状态消息。 |
-| `hand_control_service` | 核心控制服务。负责加载 YAML 拓扑、初始化总线和手、注册服务、发布实时状态 topic。 |
+| `hand_control_interfaces` | 定义服务接口，以及 `HandJointState` 实时状态消息和 `TactileState` 触觉消息。 |
+| `hand_control_service` | 核心控制服务。负责加载 YAML 拓扑、初始化总线和手、注册服务、发布实时状态和触觉 topic。 |
 | `hand_control_description` | 模型资源、RViz 配置和 `hand_state_publisher`。该节点订阅实时状态并发布 `/joint_states`。 |
 | `sequence_demo_cpp` | C++ 版本动作序列调用示例。 |
 | `sequence_demo_py` | Python 版本动作序列调用示例。 |
+| `tactile_demo_cpp` | C++ 版本触觉传感器自检示例。 |
+| `tactile_demo_py` | Python 版本触觉传感器自检示例。 |
 
 ## 运行链路
 
@@ -107,6 +112,17 @@ colcon build --packages-select \
   hand_control_description \
   --symlink-install
 ```
+
+> **改动 `hand_control_interfaces` 的接口定义后要清理再重建，删除接口时尤其如此。**
+> 增量构建不会清理 `install/hand_control_interfaces` 里旧的 typesupport 动态库，它们
+> 仍会引用已删除的符号，运行时报：
+>
+> ```text
+> undefined symbol: hand_control_interfaces__srv__xxx__request__convert_from_py
+> ```
+>
+> 清理 `build/hand_control_interfaces` 和 `install/hand_control_interfaces` 后重建即可，
+> 保险起见直接全清 `rm -rf build install log`。
 
 ## 动态库配置
 
@@ -193,6 +209,8 @@ ros2 launch hand_control_service service.launch.py \
     compat_single_hand_services: true
     publish_realtime_state: true
     realtime_state_publish_rate_hz: 100.0
+    # 触觉话题发布频率，只有至少一只手开启 tactile_enabled 时才生效
+    tactile_publish_rate_hz: 50.0
 
     buses:
       bus0:
@@ -207,6 +225,8 @@ ros2 launch hand_control_service service.launch.py \
         bus: bus0
         address: 1
         hand_type: LAC_DOF_6_S
+        # 触觉采集默认关闭，没有传感器的手开启它只会空转
+        tactile_enabled: false
 ```
 
 字段含义：
@@ -219,17 +239,26 @@ ros2 launch hand_control_service service.launch.py \
 | `compat_single_hand_services` | 是否注册无手名前缀的兼容服务和 topic。 |
 | `publish_realtime_state` | 是否发布实时状态 topic。 |
 | `realtime_state_publish_rate_hz` | 实时状态发布频率，默认 100Hz。 |
+| `tactile_publish_rate_hz` | 触觉话题发布频率，默认 50Hz。详见「触觉 Topic 与服务」。 |
 | `buses.<name>.type` | `canfd`、`rs485`、`ethercat`。也支持 `ecat` 作为 EtherCAT 别名。 |
 | `buses.<name>.channel` | 总线通道索引。CANFD 对应扫描到的 CAN 设备；RS485 对应扫描到的串口；EtherCAT 对应扫描到的网卡。 |
 | `hands.<name>.bus` | 该手挂在哪条总线上。 |
 | `hands.<name>.address` | CANFD/RS485 节点 ID，或 EtherCAT 从站号。 |
 | `hands.<name>.hand_type` | SDK 手型枚举名，例如 `LAC_DOF_6`、`LAC_DOF_6_S`、`LAC_DOF_16`。 |
+| `hands.<name>.tactile_enabled` | 是否采集并发布触觉，默认 `false`。详见「触觉 Topic 与服务」。 |
 
 ## 通讯方式
 
 ### CANFD
 
-Linux 默认使用 SocketCAN 后端，扫描 `/sys/class/net` 下以 `can` 开头的接口，例如 `can0`、`can1`。
+Linux 下 CANFD 有 SocketCAN 和 libcanbus 两种后端，**默认使用 SocketCAN**。二者只能二选一，由构建开关决定，运行时不能切换。
+
+| 后端 | 构建开关 | 适用场景 |
+| --- | --- | --- |
+| SocketCAN | 默认（OFF） | 内核 SocketCAN 接口，即 `can0` / `can1` 这类由内核管理的 CAN 设备 |
+| libcanbus | `-DHAND_CONTROL_USE_LIBCANBUS=ON` | 厂商提供的 USB-CANFD 适配器，不经过内核 SocketCAN |
+
+两种后端共用同一份总线配置，`channel` 和波特率的写法没有区别：
 
 ```yaml
 buses:
@@ -240,14 +269,86 @@ buses:
     canfd_data_baudrate: 5000000
 ```
 
-服务启动时会按配置设置 CANFD 波特率。这里的 `canfd_arb_baudrate` 和 `canfd_data_baudrate` 直接使用 SDK 元数据值，不再额外乘以 1000。
+服务启动时会按配置设置 CANFD 波特率。
 
-如需使用 `libcanbus` 后端，构建时打开：
+#### SocketCAN 后端（默认）
+
+扫描 `/sys/class/net` 下以 `can` 开头的接口，例如 `can0`、`can1`，`channel: 0` 表示扫描结果的第一个接口。
+
+需要给可执行文件设置网络权限，否则启动会失败：
 
 ```bash
-colcon build --packages-select hand_control_service \
+sudo setcap cap_net_raw,cap_net_admin+ep \
+  install/hand_control_service/lib/hand_control_service/hand_control_service
+```
+
+直接构建即为该后端：
+
+```bash
+source /opt/ros/humble/setup.bash
+colcon build --symlink-install --packages-select hand_control_service
+```
+
+#### 切换到 libcanbus 后端
+
+构建时打开开关：
+
+```bash
+source /opt/ros/humble/setup.bash
+colcon build --symlink-install --packages-select hand_control_service \
   --cmake-args -DHAND_CONTROL_USE_LIBCANBUS=ON
 ```
+
+> **切换后必须清理再重建。** 这个开关会写入 `CMakeCache.txt` 并生成 `USE_LIBCANBUS` 编译宏。在已有构建树上直接改选项，CMake 不一定重新生成宏定义，容易出现「开关是 ON、但代码里宏没生效」的假象。至少清理：
+>
+> ```bash
+> rm -rf build/hand_control_service install/hand_control_service
+> ```
+>
+> 保险起见直接全清：`rm -rf build install log`。
+
+libcanbus 在运行时通过 `dlopen` 加载，不参与链接，所以构建机上可以不装这个库，但**运行机上必须有**。库按以下顺序查找：
+
+1. 环境变量 `HAND_CONTROL_LIBCANBUS_PATH` 指向的完整路径
+2. `libcanbus.so`（走系统动态库搜索路径）
+3. `/usr/local/lib/libcanbus.so`
+
+装在非标准位置时直接指定：
+
+```bash
+export HAND_CONTROL_LIBCANBUS_PATH=/path/to/libcanbus.so
+ros2 launch hand_control_service service.launch.py
+```
+
+该后端同时依赖 `libusb-1.0.so`，一般系统自带；缺失时启动会打印 `Failed to load libusb-1.0.so`。
+
+#### 切回 SocketCAN
+
+同样要清理后重建，只是把开关关掉：
+
+```bash
+rm -rf build/hand_control_service install/hand_control_service
+source /opt/ros/humble/setup.bash
+colcon build --symlink-install --packages-select hand_control_service \
+  --cmake-args -DHAND_CONTROL_USE_LIBCANBUS=OFF
+```
+
+#### 确认当前用的是哪个后端
+
+看构建缓存里的开关值：
+
+```bash
+grep -n "HAND_CONTROL_USE_LIBCANBUS" build/hand_control_service/CMakeCache.txt
+```
+
+再看宏是否真的传给了编译器，这一步能抓出「开关改了但没清理」的情况：
+
+```bash
+grep -R --line-number -- "-DUSE_LIBCANBUS" \
+  build/hand_control_service/CMakeFiles/hand_control_service.dir
+```
+
+有输出说明编出来的是 libcanbus 后端，没有输出说明是 SocketCAN 后端。
 
 ### RS485
 
@@ -390,6 +491,14 @@ ros2 launch hand_control_service service.launch.py \
 | `set_rs485_node_id` / `get_rs485_node_id` | RS485 节点 ID。 |
 | `set_rs485_baudrate` / `get_rs485_baudrate` | RS485 波特率。 |
 
+触觉传感器（需先开启 `tactile_enabled`，详见「触觉 Topic 与服务」）：
+
+| 服务 | 说明 |
+| --- | --- |
+| `set_sensor_enable` | 开启或关闭传感器监控。 |
+| `set_finger_pressure_reset` | 将当前读数设为压力零点基准。 |
+| `get_finger_sensor_pos` | 查询位点传感单元的分布坐标。 |
+
 查看当前所有服务：
 
 ```bash
@@ -459,6 +568,104 @@ ros2 service call /hand_control/right/set_enable \
 ```bash
 ros2 topic echo /hand_control/realtime_state
 ros2 topic hz /hand_control/realtime_state
+```
+
+## 触觉 Topic 与服务
+
+触觉采集默认关闭。在手配置里打开 `tactile_enabled` 后，服务端会额外发布
+`hand_control_interfaces/msg/TactileState`：
+
+```text
+/hand_control/<hand_name>/tactile_state
+```
+
+触觉是新增能力，没有历史包袱，因此**不会**生成无前缀的兼容副本，只有带手名的那一份。
+
+### 开启方式
+
+```yaml
+# 顶层参数：触觉发布频率，只有至少一只手开启时才生效
+tactile_publish_rate_hz: 50.0
+
+hands:
+  hand:
+    tactile_enabled: true
+```
+
+| 参数 | 位置 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `tactile_enabled` | `hands.<name>` | `false` | 是否采集并发布触觉。没有传感器的手应保持关闭，避免空转。 |
+| `tactile_publish_rate_hz` | 顶层 | `50.0` | 发布频率，所有开启的手共用同一个定时器。**必须写成小数**，写成 `50` 会导致节点启动失败。 |
+
+每帧固定遍历全部 11 个位点和全部 5 个通道，没有额外的可选配置项。
+
+### 采集开销
+
+一次发布 = 11 个位点（5 指尖 + 5 指腹 + 手掌）× 5 个通道。位点的传感单元数
+`cell_count` 在首次采集时探测一次并缓存，重连或重新初始化后失效重查，所以稳态下
+是 55 次读取，不会因为两阶段调用而翻倍。
+
+总线跟不上时先调低 `tactile_publish_rate_hz`。实测一轮采集耗时超过半个发布周期
+就该降频。
+
+### 消息结构
+
+`TactileState.sites[]` 每个元素对应一个位点，`sensor_id` 即 SDK 的 `LSS_*` 枚举值：
+
+| 字段 | 量纲 |
+| --- | --- |
+| `pressure` | 归一化 [0,1]，相对零点基准的差值 |
+| `normal_force` | N |
+| `tangential_force` | N |
+| `force_direction` | deg，[0,360] |
+| `proximity` | 归一化 [0,1] |
+
+每个数组的长度等于该位点的 `cell_count`。某通道读取失败时数组为空，因此可以用
+`empty()` 区分「读取失败」和「读到全零」；`cell_count` 为 0 表示该位点不可用。
+
+### 配套服务
+
+与其他服务一样带手名前缀：
+
+| 服务 | 请求 | 说明 |
+| --- | --- | --- |
+| `set_sensor_enable` | `int32 enable` | 开启或关闭传感器监控，0 关 1 开。 |
+| `set_finger_pressure_reset` | 无 | 将当前读数设为零点基准。 |
+| `get_finger_sensor_pos` | `int32 sensor_id` | 查询该位点传感单元的分布坐标，归一化到 [0,1]。 |
+
+`tactile_enabled` 开启时，服务节点会在初始化时自动下发一次传感器使能，通常不需要
+手动调用 `set_sensor_enable`。
+
+`get_finger_sensor_pos` 返回的是静态坐标，不随采样变化，因此没有放进 topic。
+
+### 典型用法
+
+`pressure` 是相对基准的差值，要读绝对压力必须先设定零点：
+
+```bash
+ros2 service call /hand_control/hand/set_finger_pressure_reset \
+  hand_control_interfaces/srv/SetFingerPressureReset
+ros2 topic echo /hand_control/hand/tactile_state
+```
+
+查看实际发布频率，确认总线是否跑得满：
+
+```bash
+ros2 topic hz /hand_control/hand/tactile_state
+```
+
+运行中手动开关传感器采集：
+
+```bash
+ros2 service call /hand_control/hand/set_sensor_enable \
+  hand_control_interfaces/srv/SetSensorEnable "{enable: 1}"
+```
+
+查询某个位点的传感单元坐标：
+
+```bash
+ros2 service call /hand_control/hand/get_finger_sensor_pos \
+  hand_control_interfaces/srv/GetFingerSensorPos "{sensor_id: 1}"
 ```
 
 ## 模型显示
@@ -535,6 +742,36 @@ ros2 launch sequence_demo_cpp sequence.launch.py
 ```
 
 两个示例节点都运行在 `/hand_control` 命名空间下，默认调用无手名前缀的兼容服务。它们适合默认单手配置，或多手配置中的 `default_hand`。
+
+## 触觉传感器自检示例
+
+`tactile_demo_py` 和 `tactile_demo_cpp` 用来验证触觉链路是否正常工作。流程是：
+使能传感器 → 设定压力零点 → 采集若干帧 → 输出统计报告。
+
+先确保服务端对应手开启了 `tactile_enabled`，然后：
+
+```bash
+ros2 launch tactile_demo_py tactile.launch.py
+# 或
+ros2 launch tactile_demo_cpp tactile.launch.py
+```
+
+参数：
+
+| 参数 | 默认值 | 说明 |
+| --- | --- | --- |
+| `hand_name` | `hand` | 目标手名，决定订阅的话题和调用的服务前缀。 |
+| `sample_count` | `20` | 采集帧数，收够即出报告。 |
+| `timeout_sec` | `10.0` | 采集超时；超时后按已收到的样本出报告。 |
+
+输出内容包括实测发布频率、每个位点的 `cell_count` 与各通道的数组长度和最大值，
+以及一次 `get_finger_sensor_pos` 的返回规模。全程无数据的通道会单独告警。
+
+没有收到数据时，节点会提示检查 `tactile_enabled` 是否开启、以及该手型是否带传感器。
+注意服务调用返回 `-1` 通常表示手未初始化（总线没连上），此时后面的采集必然为空。
+
+与动作序列示例不同，这两个节点使用**带手名前缀**的服务名
+（例如 `hand/set_sensor_enable`），因此无论是否开启兼容模式都能找到服务。
 
 ## 推荐启动顺序
 
@@ -629,6 +866,8 @@ ros2 topic echo --once /tf
 
 ### CANFD 启动失败
 
+下面针对默认的 SocketCAN 后端。如果用的是 libcanbus 后端，见下一节。
+
 检查 CAN 接口：
 
 ```bash
@@ -649,6 +888,73 @@ getcap install/hand_control_service/lib/hand_control_service/hand_control_servic
 sudo setcap cap_net_raw,cap_net_admin+ep \
   install/hand_control_service/lib/hand_control_service/hand_control_service
 ```
+
+### libcanbus 后端加载失败
+
+启动日志打印 `Failed to load libcanbus.so` 或 `Failed to load libusb-1.0.so`，
+说明构建用的是 libcanbus 后端，但运行时没找到库。
+
+先确认构建确实切到了该后端。若开关是 ON 但编译参数里查不到 `USE_LIBCANBUS` 宏，
+说明切换时没清理构建产物，需要清理后重建。验证方法见「CANFD」章节。
+
+确认运行机上存在库文件：
+
+```bash
+ls -l /usr/local/lib/libcanbus.so
+ldconfig -p | grep libusb-1.0
+```
+
+库不在标准位置时用环境变量指定：
+
+```bash
+export HAND_CONTROL_LIBCANBUS_PATH=/path/to/libcanbus.so
+ros2 launch hand_control_service service.launch.py
+```
+
+该后端不经过内核 SocketCAN，因此不需要 `ip link set up can0`，也不需要给可执行
+文件设置 `cap_net_raw` 权限。
+
+### 触觉话题没有数据
+
+确认手配置里打开了开关，并且日志里没有出现「没有手开启 tactile_enabled」：
+
+```bash
+ros2 param get /hand_control_service hands.hand.tactile_enabled
+ros2 topic list | grep tactile
+```
+
+话题存在但 `sites` 里 `cell_count` 全是 0，说明 SDK 没探测到传感单元，常见原因：
+
+- 该手型本身不带触觉传感器
+- 传感器未使能，手动调用一次 `set_sensor_enable` 再试
+- 手未初始化（总线没连上），此时同一只手的其他服务调用也会返回 `-1`
+
+话题存在但频率明显低于配置的 `tactile_publish_rate_hz`，说明总线带宽不够，需要降频：
+
+```bash
+ros2 topic hz /hand_control/hand/tactile_state
+```
+
+### 节点启动即崩溃，提示参数类型不匹配
+
+启动日志出现：
+
+```text
+terminate called after throwing an instance of 'rclcpp::exceptions::InvalidParameterTypeException'
+  what():  parameter 'tactile_publish_rate_hz' has invalid type ...
+  ... is of type {double}, setting it to {integer} is not allowed
+```
+
+频率类参数在代码里声明为 `double`，**必须写成小数形式**。写成整数时节点会在启动阶段
+直接抛异常退出：
+
+```yaml
+tactile_publish_rate_hz: 50.0    # 正确
+tactile_publish_rate_hz: 50      # 错误，节点无法启动
+```
+
+`tactile_publish_rate_hz` 和 `realtime_state_publish_rate_hz` 都是这个规则，
+命令行覆盖时同样要带小数点（`-p tactile_publish_rate_hz:=50.0`）。
 
 ### RS485 找不到设备
 

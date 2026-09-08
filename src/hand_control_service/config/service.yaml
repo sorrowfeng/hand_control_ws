@@ -8,6 +8,10 @@
     compat_single_hand_services: true
     publish_realtime_state: true
     realtime_state_publish_rate_hz: 100.0
+    # 触觉话题发布频率，只有在至少一只手开启 tactile_enabled 时才生效。
+    # 全量采集 11 个位点 × 5 个通道开销较大，总线跟不上时应调低。
+    # 注意：必须写成小数形式。写成 50 会因参数类型不匹配导致节点启动失败。
+    tactile_publish_rate_hz: 50.0
 
     buses:
       bus0:
@@ -22,6 +26,8 @@
         bus: bus0
         address: 1
         hand_type: LAC_DOF_6_S
+        # 触觉采集默认关闭：没有传感器的手开启它只会空转。
+        tactile_enabled: false
 
 # See two_hands_same_bus.yaml and two_hands_two_buses.yaml
 # for complete two-hand examples.

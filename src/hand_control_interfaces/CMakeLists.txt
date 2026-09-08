@@ -12,6 +12,8 @@ find_package(std_msgs REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/HandJointState.msg"
+  "msg/TactileSite.msg"
+  "msg/TactileState.msg"
   "srv/ControlMotors.srv"
   "srv/GetAngle.srv"
   "srv/GetAngularVelocity.srv"
@@ -20,6 +22,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/GetCanfdDataBaudrate.srv"
   "srv/GetControlMode.srv"
   "srv/GetEnable.srv"
+  "srv/GetFingerSensorPos.srv"
   "srv/GetFirmwareVersion.srv"
   "srv/GetHomeCurrent.srv"
   "srv/GetMaxCurrent.srv"
@@ -49,6 +52,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/SetClearAlarm.srv"
   "srv/SetControlMode.srv"
   "srv/SetEnable.srv"
+  "srv/SetFingerPressureReset.srv"
   "srv/SetHomeCurrent.srv"
   "srv/SetMaxCurrent.srv"
   "srv/SetMoveNoHome.srv"
@@ -57,6 +61,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/SetRs485Baudrate.srv"
   "srv/SetRs485NodeId.srv"
   "srv/SetSafeCurrentEnable.srv"
+  "srv/SetSensorEnable.srv"
   "srv/StopMotors.srv"
   DEPENDENCIES std_msgs
 )

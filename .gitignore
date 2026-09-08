@@ -4,6 +4,13 @@ install/
 log/
 dist/
 
+# CMake out-of-source builds
+cmake-build-*/
+CMakeUserPresets.json
+
+# WorkBuddy local workspace data
+.workbuddy/
+
 # IDE and editor files
 .vscode/
 .idea/
@@ -18,6 +25,11 @@ Thumbs.db
 # Python bytecode
 __pycache__/
 *.pyc
+
+# Python build artifacts and tool caches
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
 
 
 # ROS2 specific

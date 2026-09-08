@@ -24,6 +24,7 @@
 #include "RS485Master.h"
 
 #include "hand_control_interfaces/msg/hand_joint_state.hpp"
+#include "hand_control_interfaces/msg/tactile_state.hpp"
 #include "hand_control_interfaces/srv/control_motors.hpp"
 #include "hand_control_interfaces/srv/get_angle.hpp"
 #include "hand_control_interfaces/srv/get_angular_velocity.hpp"
@@ -32,6 +33,7 @@
 #include "hand_control_interfaces/srv/get_canfd_data_baudrate.hpp"
 #include "hand_control_interfaces/srv/get_control_mode.hpp"
 #include "hand_control_interfaces/srv/get_enable.hpp"
+#include "hand_control_interfaces/srv/get_finger_sensor_pos.hpp"
 #include "hand_control_interfaces/srv/get_firmware_version.hpp"
 #include "hand_control_interfaces/srv/get_home_current.hpp"
 #include "hand_control_interfaces/srv/get_max_current.hpp"
@@ -61,6 +63,7 @@
 #include "hand_control_interfaces/srv/set_clear_alarm.hpp"
 #include "hand_control_interfaces/srv/set_control_mode.hpp"
 #include "hand_control_interfaces/srv/set_enable.hpp"
+#include "hand_control_interfaces/srv/set_finger_pressure_reset.hpp"
 #include "hand_control_interfaces/srv/set_home_current.hpp"
 #include "hand_control_interfaces/srv/set_max_current.hpp"
 #include "hand_control_interfaces/srv/set_move_no_home.hpp"
@@ -69,6 +72,7 @@
 #include "hand_control_interfaces/srv/set_rs485_baudrate.hpp"
 #include "hand_control_interfaces/srv/set_rs485_node_id.hpp"
 #include "hand_control_interfaces/srv/set_safe_current_enable.hpp"
+#include "hand_control_interfaces/srv/set_sensor_enable.hpp"
 #include "hand_control_interfaces/srv/stop_motors.hpp"
 
 #ifndef COMMUNICATION_MODE
@@ -157,6 +161,26 @@ constexpr const char* SRV_NAME_STOP_MOTORS = "stop_motors";
 constexpr const char* SRV_NAME_PLAY_GESTURE = "play_gesture";
 constexpr const char* SRV_NAME_CONTROL_MOTORS = "control_motors";
 constexpr const char* TOPIC_NAME_REALTIME_STATE = "realtime_state";
+constexpr const char* TOPIC_NAME_TACTILE_STATE = "tactile_state";
+constexpr const char* SRV_NAME_SET_SENSOR_ENABLE = "set_sensor_enable";
+constexpr const char* SRV_NAME_SET_FINGER_PRESSURE_RESET =
+    "set_finger_pressure_reset";
+constexpr const char* SRV_NAME_GET_FINGER_SENSOR_POS =
+    "get_finger_sensor_pos";
+
+// 触觉采集默认发布频率。全量读取 11 个位点 × 5 个通道代价不低，
+// 如果总线跟不上应调低这个值。
+constexpr double TACTILE_PUBLISH_RATE_HZ = 50.0;
+
+// 全部触觉传感位点：5 指尖 + 5 指腹 + 手掌。
+const std::vector<int> kTactileSiteIds = {
+    HC_SDK_NS::LSS_FINGER_1_1, HC_SDK_NS::LSS_FINGER_1_2,
+    HC_SDK_NS::LSS_FINGER_2_1, HC_SDK_NS::LSS_FINGER_2_2,
+    HC_SDK_NS::LSS_FINGER_3_1, HC_SDK_NS::LSS_FINGER_3_2,
+    HC_SDK_NS::LSS_FINGER_4_1, HC_SDK_NS::LSS_FINGER_4_2,
+    HC_SDK_NS::LSS_FINGER_5_1, HC_SDK_NS::LSS_FINGER_5_2,
+    HC_SDK_NS::LSS_HAND_PALM,
+};
 
 std::string toLower(std::string value) {
   std::transform(value.begin(), value.end(), value.begin(), [](char c) {
@@ -241,6 +265,7 @@ struct HandConfig {
   std::string bus_name;
   int address{1};
   int hand_type{HAND_TYPE};
+  bool tactile_enabled{false};
 };
 
 class BusBase;
@@ -252,7 +277,8 @@ class HandDevice {
         bus_name_(std::move(config.bus_name)),
         address_(config.address),
         hand_type_(config.hand_type),
-        sdk_(std::make_shared<HC_SDK_NS::HC_SDK_CLASS>()) {}
+        sdk_(std::make_shared<HC_SDK_NS::HC_SDK_CLASS>()),
+        tactile_enabled_(config.tactile_enabled) {}
 
   ~HandDevice() { close(); }
 
@@ -261,6 +287,7 @@ class HandDevice {
   int address() const { return address_; }
   int handType() const { return hand_type_; }
   int activeDof() const { return active_dof_; }
+  bool tactileEnabled() const { return tactile_enabled_; }
   BusType busType() const { return bus_type_; }
   std::shared_ptr<HC_SDK_NS::HC_SDK_CLASS> sdk() const { return sdk_; }
   void setBus(const std::shared_ptr<BusBase>& bus, BusType type) {
@@ -316,6 +343,8 @@ class HandDevice {
     active_dof_ = active;
     last_now_angles_.assign(active_dof_ + 1, 0.0f);
     has_last_now_angle_.assign(active_dof_ + 1, false);
+    invalidateTactileCache();
+    applyTactileConfig(logger);
     initialized_ = true;
     RCLCPP_INFO(logger, "[%s] 初始化完成 bus=%s address=%d dof=%d/%d",
                 name_.c_str(), bus_name_.c_str(), address_, active, total);
@@ -452,10 +481,56 @@ class HandDevice {
     return true;
   }
 
+  bool readTactileState(hand_control_interfaces::msg::TactileState& msg) {
+    if (!initialized_) return false;
+
+    msg.hand_name = name_;
+    msg.bus_name = bus_name_;
+    msg.address = address_;
+    msg.sites.clear();
+    msg.sites.reserve(kTactileSiteIds.size());
+
+    for (const int sensor_id : kTactileSiteIds) {
+      hand_control_interfaces::msg::TactileSite site;
+      site.sensor_id = sensor_id;
+      site.cell_count = sensorCellCount(sensor_id);
+
+      if (site.cell_count > 0) {
+        readTactileChannel(sensor_id, site.cell_count,
+                           &HC_SDK_NS::HC_SDK_CLASS::get_finger_pressure,
+                           site.pressure);
+        readTactileChannel(
+            sensor_id, site.cell_count,
+            &HC_SDK_NS::HC_SDK_CLASS::get_finger_normal_force_ex,
+            site.normal_force);
+        readTactileChannel(
+            sensor_id, site.cell_count,
+            &HC_SDK_NS::HC_SDK_CLASS::get_finger_tangential_force_ex,
+            site.tangential_force);
+        readTactileChannel(
+            sensor_id, site.cell_count,
+            &HC_SDK_NS::HC_SDK_CLASS::get_finger_force_direction_ex,
+            site.force_direction);
+        readTactileChannel(sensor_id, site.cell_count,
+                           &HC_SDK_NS::HC_SDK_CLASS::get_finger_proximity_ex,
+                           site.proximity);
+      }
+
+      msg.sites.push_back(std::move(site));
+    }
+
+    return true;
+  }
+
+  // 传感单元数量只取决于硬件型号，长期有效，因此只在初始化、
+  // 关闭和重新初始化时清空缓存。
+  void invalidateTactileCache() { cell_count_cache_.clear(); }
+
   void close() {
     if (!sdk_) return;
     sdk_->close();
     initialized_ = false;
+    cell_count_cache_.clear();
   }
 
   bool isInitialized() const { return initialized_; }
@@ -463,6 +538,66 @@ class HandDevice {
   bool isBusAlive() const;
 
  private:
+  // SDK 的 _ex 系列签名统一为 (sensor_id, buffer, io_count)，
+  // 所以可以用同一个成员函数指针类型驱动全部通道。
+  using TactileExGetter = int (HC_SDK_NS::HC_SDK_CLASS::*)(int, float*, int*);
+
+  void applyTactileConfig(rclcpp::Logger logger) {
+    if (!tactile_enabled_) return;
+
+    const int result = sdk_->set_sensor_enable(1);
+    if (result != HC_SDK_NS::LER_NONE) {
+      RCLCPP_WARN(logger, "[%s] set_sensor_enable 失败: %d", name_.c_str(),
+                  result);
+    }
+  }
+
+  // 两阶段调用的第一阶段只在缓存缺失时执行，否则每帧调用数会翻倍。
+  int sensorCellCount(int sensor_id) {
+    auto it = cell_count_cache_.find(sensor_id);
+    if (it != cell_count_cache_.end()) return it->second;
+
+    // 不同手型支持的通道不同，依次探测，取第一个能拿到单元数量的通道。
+    const TactileExGetter probes[] = {
+        &HC_SDK_NS::HC_SDK_CLASS::get_finger_pressure,
+        &HC_SDK_NS::HC_SDK_CLASS::get_finger_normal_force_ex,
+        &HC_SDK_NS::HC_SDK_CLASS::get_finger_proximity_ex,
+    };
+    for (const auto probe : probes) {
+      int count = 0;
+      if ((sdk_.get()->*probe)(sensor_id, nullptr, &count) ==
+              HC_SDK_NS::LER_NONE &&
+          count > 0) {
+        cell_count_cache_[sensor_id] = count;
+        return count;
+      }
+    }
+    return 0;
+  }
+
+  bool readTactileChannel(int sensor_id, int cell_count,
+                          TactileExGetter getter,
+                          std::vector<double>& out) const {
+    out.clear();
+    if (!initialized_ || !sdk_ || !getter || cell_count <= 0) return false;
+
+    std::vector<float> buffer(static_cast<size_t>(cell_count), 0.0f);
+    int io_count = cell_count;
+    const int result =
+        (sdk_.get()->*getter)(sensor_id, buffer.data(), &io_count);
+    if (result != HC_SDK_NS::LER_NONE) return false;
+
+    const int valid = std::min(io_count, cell_count);
+    if (valid <= 0) return false;
+
+    out.resize(static_cast<size_t>(valid));
+    for (int i = 0; i < valid; ++i) {
+      out[static_cast<size_t>(i)] =
+          static_cast<double>(buffer[static_cast<size_t>(i)]);
+    }
+    return true;
+  }
+
   int readNowAngleLocked(int joint_id, float* angle, bool* from_cache) {
     float value = 0.0f;
     const int result = sdk_->get_now_angle(joint_id, &value);
@@ -503,6 +638,8 @@ class HandDevice {
   std::function<bool(const unsigned char*, unsigned int)> rs485_send_function_;
   std::function<bool(const unsigned char*, unsigned int)>
       ethercat_send_function_;
+  bool tactile_enabled_{false};
+  std::unordered_map<int, int> cell_count_cache_;
 };
 
 class BusBase : public std::enable_shared_from_this<BusBase> {
@@ -807,6 +944,7 @@ struct HandControlService::Impl {
     attachHands();
     registerAllServices();
     registerRealtimeStatePublishers();
+    registerTactileStatePublishers();
     reconnect_timer_ = node_->create_wall_timer(
         std::chrono::seconds(5), [this]() { checkAndReconnect(); });
   }
@@ -814,6 +952,8 @@ struct HandControlService::Impl {
   ~Impl() {
     realtime_state_timer_.reset();
     realtime_state_publishers_.clear();
+    tactile_state_timer_.reset();
+    tactile_state_publishers_.clear();
     services_.clear();
     hands_.clear();
     for (auto& item : buses_) {
@@ -825,10 +965,16 @@ struct HandControlService::Impl {
   rclcpp::Logger logger() const { return node_->get_logger(); }
 
   using HandJointState = hand_control_interfaces::msg::HandJointState;
+  using TactileState = hand_control_interfaces::msg::TactileState;
 
   struct RealtimeStatePublisher {
     std::shared_ptr<HandDevice> hand;
     rclcpp::Publisher<HandJointState>::SharedPtr publisher;
+  };
+
+  struct TactileStatePublisher {
+    std::shared_ptr<HandDevice> hand;
+    rclcpp::Publisher<TactileState>::SharedPtr publisher;
   };
 
   void loadConfig() {
@@ -852,6 +998,8 @@ struct HandControlService::Impl {
         node_->declare_parameter<bool>("publish_realtime_state", true);
     realtime_state_publish_rate_hz_ = node_->declare_parameter<double>(
         "realtime_state_publish_rate_hz", 100.0);
+    tactile_publish_rate_hz_ = node_->declare_parameter<double>(
+        "tactile_publish_rate_hz", TACTILE_PUBLISH_RATE_HZ);
 
     for (const auto& bus_name : bus_names_) {
       BusConfig cfg;
@@ -885,6 +1033,8 @@ struct HandControlService::Impl {
       const std::string hand_type = node_->declare_parameter<std::string>(
           "hands." + hand_name + ".hand_type", "LAC_DOF_6");
       cfg.hand_type = parseHandType(hand_type);
+      cfg.tactile_enabled = node_->declare_parameter<bool>(
+          "hands." + hand_name + ".tactile_enabled", false);
       hand_configs_[hand_name] = cfg;
     }
 
@@ -1085,6 +1235,54 @@ struct HandControlService::Impl {
       msg.header.stamp = node_->now();
       msg.header.frame_id = hand->name();
       if (hand->readRealtimeState(msg)) {
+        item.publisher->publish(msg);
+      }
+    }
+  }
+
+  void registerTactileStatePublishers() {
+    for (const auto& item : hands_) {
+      if (!item.second->tactileEnabled()) continue;
+      addTactileStatePublisher(item.second, item.second->name());
+    }
+
+    if (tactile_state_publishers_.empty()) {
+      RCLCPP_INFO(logger(), "没有手开启 tactile_enabled，触觉话题未启用");
+      return;
+    }
+
+    if (tactile_publish_rate_hz_ <= 0.0) {
+      tactile_publish_rate_hz_ = TACTILE_PUBLISH_RATE_HZ;
+    }
+
+    const auto period = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::duration<double>(1.0 / tactile_publish_rate_hz_));
+    tactile_state_timer_ = node_->create_wall_timer(
+        period, [this]() { publishTactileStates(); });
+    RCLCPP_INFO(logger(), "触觉话题发布频率: %.1f Hz",
+                tactile_publish_rate_hz_);
+  }
+
+  void addTactileStatePublisher(const std::shared_ptr<HandDevice>& hand,
+                                const std::string& prefix) {
+    const std::string topic_name =
+        serviceName(prefix, TOPIC_NAME_TACTILE_STATE);
+    auto publisher =
+        node_->create_publisher<TactileState>(topic_name, rclcpp::QoS(10));
+    tactile_state_publishers_.push_back({hand, publisher});
+    RCLCPP_INFO(logger(), "[%s] 触觉话题: %s", hand->name().c_str(),
+                topic_name.c_str());
+  }
+
+  void publishTactileStates() {
+    for (const auto& item : tactile_state_publishers_) {
+      const auto& hand = item.hand;
+      if (!hand || !hand->isInitialized() || !hand->isBusAlive()) continue;
+
+      TactileState msg;
+      msg.header.stamp = node_->now();
+      msg.header.frame_id = hand->name();
+      if (hand->readTactileState(msg)) {
         item.publisher->publish(msg);
       }
     }
@@ -1623,6 +1821,69 @@ struct HandControlService::Impl {
           res->result = h->sdk()->play_gesture(req->gesture_id, req->velocity,
                                                req->current);
         });
+
+    addService<SetSensorEnable>(
+        hand, prefix, SRV_NAME_SET_SENSOR_ENABLE,
+        [this](auto h, auto req, auto res) {
+          if (!checkReady(h, SRV_NAME_SET_SENSOR_ENABLE)) {
+            res->result = -1;
+            return;
+          }
+          res->result = h->sdk()->set_sensor_enable(req->enable);
+        });
+
+    addService<SetFingerPressureReset>(
+        hand, prefix, SRV_NAME_SET_FINGER_PRESSURE_RESET,
+        [this](auto h, auto req, auto res) {
+          (void)req;
+          if (!checkReady(h, SRV_NAME_SET_FINGER_PRESSURE_RESET)) {
+            res->result = -1;
+            return;
+          }
+          res->result = h->sdk()->set_finger_pressure_reset();
+        });
+
+    addService<GetFingerSensorPos>(
+        hand, prefix, SRV_NAME_GET_FINGER_SENSOR_POS,
+        [this](auto h, auto req, auto res) {
+          if (!checkReady(h, SRV_NAME_GET_FINGER_SENSOR_POS)) {
+            res->x.clear();
+            res->y.clear();
+            return;
+          }
+
+          int count = 0;
+          int result = h->sdk()->get_finger_sensor_pos(req->sensor_id, nullptr,
+                                                       nullptr, &count);
+          if (result != HC_SDK_NS::LER_NONE || count <= 0) {
+            RCLCPP_WARN(logger(), "[%s] 获取传感单元数量失败: %d",
+                        SRV_NAME_GET_FINGER_SENSOR_POS, result);
+            res->x.clear();
+            res->y.clear();
+            return;
+          }
+
+          std::vector<float> x_values(static_cast<size_t>(count), 0.0f);
+          std::vector<float> y_values(static_cast<size_t>(count), 0.0f);
+          result = h->sdk()->get_finger_sensor_pos(
+              req->sensor_id, x_values.data(), y_values.data(), &count);
+          if (result != HC_SDK_NS::LER_NONE) {
+            RCLCPP_WARN(logger(), "[%s] 获取传感单元坐标失败: %d",
+                        SRV_NAME_GET_FINGER_SENSOR_POS, result);
+            res->x.clear();
+            res->y.clear();
+            return;
+          }
+
+          res->x.reserve(static_cast<size_t>(count));
+          res->y.reserve(static_cast<size_t>(count));
+          for (int i = 0; i < count; ++i) {
+            res->x.push_back(
+                static_cast<double>(x_values[static_cast<size_t>(i)]));
+            res->y.push_back(
+                static_cast<double>(y_values[static_cast<size_t>(i)]));
+          }
+        });
   }
 
   void checkAndReconnect() {
@@ -1630,6 +1891,10 @@ struct HandControlService::Impl {
       if (!item.second->isAlive()) {
         RCLCPP_WARN(logger(), "[%s] 总线异常，尝试重连", item.first.c_str());
         item.second->restart(logger());
+        // 总线复位后传感单元数量可能变化，清掉缓存让下一帧重新探测。
+        for (auto& hand_item : hands_) {
+          hand_item.second->invalidateTactileCache();
+        }
       }
     }
   }
@@ -1641,14 +1906,17 @@ struct HandControlService::Impl {
   bool compat_single_hand_services_{true};
   bool publish_realtime_state_{true};
   double realtime_state_publish_rate_hz_{100.0};
+  double tactile_publish_rate_hz_{TACTILE_PUBLISH_RATE_HZ};
   std::unordered_map<std::string, BusConfig> bus_configs_;
   std::unordered_map<std::string, HandConfig> hand_configs_;
   std::unordered_map<std::string, std::shared_ptr<BusBase>> buses_;
   std::unordered_map<std::string, std::shared_ptr<HandDevice>> hands_;
   std::vector<rclcpp::ServiceBase::SharedPtr> services_;
   std::vector<RealtimeStatePublisher> realtime_state_publishers_;
+  std::vector<TactileStatePublisher> tactile_state_publishers_;
   rclcpp::TimerBase::SharedPtr reconnect_timer_;
   rclcpp::TimerBase::SharedPtr realtime_state_timer_;
+  rclcpp::TimerBase::SharedPtr tactile_state_timer_;
 };
 
 HandControlService::HandControlService() : Node("hand_control_service") {

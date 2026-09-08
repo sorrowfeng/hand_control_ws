@@ -1,0 +1,6 @@
+# 开启或关闭触觉传感器监控。
+# enable: 0 - 关闭, 1 - 开启
+
+int32 enable
+---
+int32 result

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 import shutil
 import subprocess
@@ -25,6 +26,7 @@ SDK_PROFILE_REL = Path("src/hand_control_service/config/sdk_profile.cmake")
 EXCLUDED_ROOT_NAMES = {
     ".git",
     ".pytest_cache",
+    ".workbuddy",
     "__pycache__",
     "build",
     "dist",
@@ -35,6 +37,7 @@ EXCLUDED_ROOT_NAMES = {
 
 EXCLUDED_ANYWHERE_NAMES = {
     ".pytest_cache",
+    ".workbuddy",
     "__pycache__",
 }
 
@@ -235,6 +238,19 @@ def safe_reset_dir(path: Path, output_dir: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
 
 
+def resolve_output_dir(output_dir: Path, date_str: str | None, use_date_dir: bool) -> Path:
+    """Append a date subfolder such as dist/2026-09-08 unless disabled."""
+    if not use_date_dir:
+        return output_dir
+    if date_str:
+        try:
+            datetime.date.fromisoformat(date_str)
+        except ValueError as exc:
+            raise ValueError(f"--date must use YYYY-MM-DD format: {date_str}") from exc
+        return output_dir / date_str
+    return output_dir / datetime.date.today().isoformat()
+
+
 def package_vendor(
     vendor_key: str,
     output_dir: Path,
@@ -331,7 +347,16 @@ def parse_args() -> argparse.Namespace:
         "--output-dir",
         type=Path,
         default=DEFAULT_OUTPUT_DIR,
-        help="Directory for generated package artifacts",
+        help="Root directory for generated packages; a YYYY-MM-DD subfolder is appended",
+    )
+    parser.add_argument(
+        "--date",
+        help="Date subfolder to use, YYYY-MM-DD. Defaults to today's local date.",
+    )
+    parser.add_argument(
+        "--no-date-subdir",
+        action="store_true",
+        help="Write directly into --output-dir without a date subfolder",
     )
     parser.add_argument(
         "--keep-staging",
@@ -359,9 +384,10 @@ def main() -> int:
     vendor_key = args.vendor or prompt_vendor(vendors)
 
     try:
+        target_dir = resolve_output_dir(args.output_dir, args.date, not args.no_date_subdir)
         archive_path = package_vendor(
             vendor_key,
-            args.output_dir,
+            target_dir,
             args.keep_staging,
             args.strip_libs,
             args.strict_scan,
