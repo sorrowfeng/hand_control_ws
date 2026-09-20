@@ -1070,7 +1070,7 @@ source install/setup.bash
 
 ```text
 src/hand_control_service/thirdparty/
-  include/       厂商 SDK 头文件（LHandProLib / LumiDex11SLib ...）
+  include/       厂商 SDK 头文件
   lib/           厂商 SDK 动态库
   share/         厂商工具、udev 规则、libcanbus 等
   gsusb-canfd/   CANFD 默认后端源码（静态编译进服务）
