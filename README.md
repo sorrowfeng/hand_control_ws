@@ -156,7 +156,9 @@ sudo ldconfig
 
 ## 权限配置
 
-SocketCAN 方式需要操作 CAN 网络接口。如果不希望每次用 `sudo` 运行服务，可给服务可执行文件添加能力：
+默认的 gsusb-canfd 后端需要 USB 访问权限，建议安装 udev 规则，详见「通讯方式 → CANFD」。
+
+若使用 SocketCAN，需要操作 CAN 网络接口；如果不希望每次用 `sudo` 运行服务，可给服务可执行文件添加能力：
 
 ```bash
 sudo setcap cap_net_raw,cap_net_admin+ep \
@@ -253,7 +255,7 @@ ros2 launch hand_control_service service.launch.py \
 
 ### CANFD
 
-CANFD 有三种后端，**默认使用 gsusb-canfd**（用户态 libusb 的 `gs_usb` 驱动，Windows / Linux / macOS 通用，完整支持 CAN FD）。后端在编译期四选一，由构建开关决定，运行时不能切换。
+CANFD 有三种后端，**默认使用 gsusb-canfd**（用户态 libusb 的 `gs_usb` 驱动，Windows / Linux / macOS 通用，完整支持 CAN FD）。该库为开源项目：[sorrowfeng/gsusb-canfd](https://github.com/sorrowfeng/gsusb-canfd)。后端在编译期四选一，由构建开关决定，运行时不能切换。
 
 | 后端 | 构建开关 | 适用场景 |
 | --- | --- | --- |
@@ -277,7 +279,7 @@ buses:
 
 #### gsusb-canfd 后端（默认）
 
-源码内置于 `src/hand_control_service/thirdparty/gsusb-canfd`，构建时作为静态库 `add_subdirectory`，链接 `canfd` 目标。三平台共用同一段代码。
+源码内置于 `src/hand_control_service/thirdparty/gsusb-canfd`，构建时作为静态库 `add_subdirectory`，链接 `canfd` 目标。三平台共用同一段代码。上游仓库：[sorrowfeng/gsusb-canfd](https://github.com/sorrowfeng/gsusb-canfd)（内置版本 v0.1.2）。
 
 运行/构建环境需要 `libusb-1.0` 开发包：
 
@@ -1062,20 +1064,26 @@ colcon build --packages-select hand_control_service --symlink-install
 source install/setup.bash
 ```
 
-## 第三方 SDK
+## 第三方依赖与 SDK
 
-SDK 相关文件在：
+所有第三方组件统一放在 `src/hand_control_service/thirdparty/`：
 
 ```text
 src/hand_control_service/thirdparty/
-  include/
-  lib/
-  bin/
-  docs/
-  share/
+  include/       厂商 SDK 头文件（LHandProLib / LumiDex11SLib ...）
+  lib/           厂商 SDK 动态库
+  share/         厂商工具、udev 规则、libcanbus 等
+  gsusb-canfd/   CANFD 默认后端源码（静态编译进服务）
+  SOEM/          EtherCAT 主站库源码（静态编译进服务）
 ```
 
-其中 `docs` 和 `share` 保留了 SDK 手册以及 CANFD、RS485、EtherCAT 的 C++/Python 参考示例。
+| 组件 | 用途 | 来源 |
+| --- | --- | --- |
+| [gsusb-canfd](https://github.com/sorrowfeng/gsusb-canfd) | CANFD 默认后端，用户态 libusb `gs_usb` 驱动 | 内置源码，构建为静态库 `canfd` |
+| SOEM | EtherCAT 主站协议栈 | 内置源码，构建为静态库 `soem` |
+| 厂商 SDK | 手部协议、触觉传感器等 | `include/` + `lib/`，由 vendor 打包流程提供 |
+
+`share/` 保留了厂商 SDK 手册、CANFD/RS485/EtherCAT 参考示例，以及 libcanbus、udev 规则等运行辅助文件。
 
 ## 开发提示
 
