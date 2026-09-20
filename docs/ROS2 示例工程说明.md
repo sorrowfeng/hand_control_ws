@@ -210,31 +210,51 @@ buses:
 
 服务启动时会按配置设置 CANFD 波特率。
 
-Linux 下 CANFD 有 SocketCAN 和 libcanbus 两种后端，**默认使用 SocketCAN**。二者只能二选一，由构建开关决定，运行时不能切换。
+CANFD 有三种后端，**默认使用 gsusb-canfd**（用户态 libusb 的 `gs_usb` 驱动，Windows / Linux / macOS 通用，支持 CAN FD）。后端在编译期四选一，由构建开关决定，运行时不能切换。
 
 | 后端 | 构建开关 | 适用场景 |
 | --- | --- | --- |
-| SocketCAN | 默认（OFF） | 内核 SocketCAN 接口，即 `can0` / `can1` |
-| libcanbus | `-DHAND_CONTROL_USE_LIBCANBUS=ON` | 厂商 USB-CANFD 适配器，不经内核 SocketCAN |
+| gsusb-canfd | 默认（ON） | candleLight / `gs_usb` 兼容 USB-CANFD 适配器，依赖 `libusb-1.0` |
+| SocketCAN | `-DHAND_CONTROL_USE_SOCKETCAN=ON` | 内核 SocketCAN 接口，即 `can0` / `can1`，仅 Linux |
+| libcanbus | `-DHAND_CONTROL_USE_LIBCANBUS=ON` | 厂商 USB-CANFD 适配器，不经内核 SocketCAN，仅 Linux |
+| HCanbus | `-DHAND_CONTROL_USE_HCANBUS=ON` | 厂商 HCanbus SDK，仅 Windows |
 
-#### SocketCAN 后端（默认）
+#### gsusb-canfd 后端（默认）
 
-扫描 `/sys/class/net` 下以 `can` 开头的接口，`channel: 0` 表示扫描结果的第一个接口。需要给可执行文件网络权限：
+源码内置于 `thirdparty/gsusb-canfd`，构建时作为静态库链接。需要 `libusb-1.0` 开发包（`sudo apt install libusb-1.0-0-dev`），并建议安装 udev 规则：
+
+```bash
+sudo cp src/hand_control_service/thirdparty/share/libcanbus/hcanbus.rules \
+  /etc/udev/rules.d/99-hcanbus.rules
+sudo udevadm control --reload-rules && sudo udevadm trigger
+```
+
+直接构建即为该后端：
+
+```bash
+source /opt/ros/humble/setup.bash
+colcon build --symlink-install --packages-select hand_control_service
+```
+
+#### 切换到 SocketCAN / libcanbus
+
+```bash
+# SocketCAN
+colcon build --symlink-install --packages-select hand_control_service \
+  --cmake-args -DHAND_CONTROL_USE_SOCKETCAN=ON
+# libcanbus
+colcon build --symlink-install --packages-select hand_control_service \
+  --cmake-args -DHAND_CONTROL_USE_LIBCANBUS=ON
+```
+
+SocketCAN 扫描 `/sys/class/net` 下以 `can` 开头的接口，需要给可执行文件网络权限：
 
 ```bash
 sudo setcap cap_net_raw,cap_net_admin+ep \
   install/hand_control_service/lib/hand_control_service/hand_control_service
 ```
 
-#### 切换到 libcanbus 后端
-
-```bash
-source /opt/ros/humble/setup.bash
-colcon build --symlink-install --packages-select hand_control_service \
-  --cmake-args -DHAND_CONTROL_USE_LIBCANBUS=ON
-```
-
-> **切换后必须清理再重建。** 开关会写入 `CMakeCache.txt` 并生成 `USE_LIBCANBUS` 编译宏。
+> **切换后必须清理再重建。** 开关会写入 `CMakeCache.txt` 并生成对应的 `HAND_CONTROL_CANFD_USE_*` 编译宏。
 > 在已有构建树上直接改选项，CMake 不一定重新生成宏定义，会出现「开关是 ON、代码里宏没生效」。
 > 至少清理 `build/hand_control_service` 和 `install/hand_control_service`。
 
@@ -249,12 +269,13 @@ libcanbus 运行时通过 `dlopen` 加载，不参与链接，所以构建机可
 #### 确认当前用的是哪个后端
 
 ```bash
-grep -n "HAND_CONTROL_USE_LIBCANBUS" build/hand_control_service/CMakeCache.txt
-grep -R --line-number -- "-DUSE_LIBCANBUS" \
+grep -n "HAND_CONTROL_USE_GSUSB_CANFD\|HAND_CONTROL_USE_SOCKETCAN\|HAND_CONTROL_USE_LIBCANBUS" \
+  build/hand_control_service/CMakeCache.txt
+grep -R --line-number -- "-DHAND_CONTROL_CANFD_USE" \
   build/hand_control_service/CMakeFiles/hand_control_service.dir
 ```
 
-第二条有输出说明编出来的是 libcanbus 后端，能抓出「开关改了但没清理」的情况。
+第二条输出里出现 `HAND_CONTROL_CANFD_USE_GSUSB` 即为 gsusb-canfd 后端，能抓出「开关改了但没清理」的情况。
 
 ### RS485
 
@@ -639,9 +660,19 @@ ros2 topic info -v /joint_states
 
 ### CANFD 启动失败
 
-下面针对默认的 SocketCAN 后端。如果用的是 libcanbus 后端，见下一节。
+默认后端是 gsusb-canfd。启动日志出现 `libusb_open failed: LIBUSB_ERROR_ACCESS` 说明
+USB 适配器存在但没有访问权限，安装 udev 规则后重新插拔适配器：
 
-检查：
+```bash
+sudo cp src/hand_control_service/thirdparty/share/libcanbus/hcanbus.rules \
+  /etc/udev/rules.d/99-hcanbus.rules
+sudo udevadm control --reload-rules && sudo udevadm trigger
+```
+
+用 `lsusb` 确认能看到适配器（例如 `a8fa:8598 ... CANFD Analyser`）。若日志是
+「未找到 CANFD 通道」，说明没有扫描到 `gs_usb` 适配器。
+
+如果用的是 SocketCAN 后端，检查：
 
 - CAN 设备是否能被扫描到（`ip link show` 里是否存在 `can*` 接口）。
 - `channel` 是否是正确的设备索引。
@@ -653,12 +684,12 @@ ros2 topic info -v /joint_states
 启动日志打印 `Failed to load libcanbus.so` 或 `Failed to load libusb-1.0.so`，说明构建
 用的是 libcanbus 后端，但运行时没找到库。
 
-先确认构建确实切到了该后端。若开关是 ON 但编译参数里查不到 `USE_LIBCANBUS` 宏，
-说明切换时没清理构建产物，需要清理后重建：
+先确认构建确实切到了该后端。若开关是 ON 但编译参数里查不到
+`HAND_CONTROL_CANFD_USE_LIBCANBUS` 宏，说明切换时没清理构建产物，需要清理后重建：
 
 ```bash
 grep -n "HAND_CONTROL_USE_LIBCANBUS" build/hand_control_service/CMakeCache.txt
-grep -R --line-number -- "-DUSE_LIBCANBUS" \
+grep -R --line-number -- "-DHAND_CONTROL_CANFD_USE_LIBCANBUS" \
   build/hand_control_service/CMakeFiles/hand_control_service.dir
 ```
 

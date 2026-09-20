@@ -1,6 +1,62 @@
 #ifndef CANFDMASTER_H
 #define CANFDMASTER_H
 
+// ============================================================================
+// CANFD backend selection (compile time, backends are mutually exclusive)
+// ----------------------------------------------------------------------------
+//   backend              platform            dependency
+//   ------------------   ----------------    --------------------------------
+//   gsusb-canfd (default) Windows/Linux/macOS libusb-1.0 (userspace gs_usb)
+//   SocketCAN            Linux               in-kernel (can0 ...), no extra deps
+//   libcanbus            Linux               /usr/local/lib/libcanbus.so
+//                                             + libusb-1.0.so
+//   HCanbus              Windows             vendor HCanbus SDK
+//
+// The default backend is gsusb-canfd. Switching is done with the CMake options:
+//   -DHAND_CONTROL_USE_GSUSB_CANFD=ON   <- default
+//   -DHAND_CONTROL_USE_SOCKETCAN=ON
+//   -DHAND_CONTROL_USE_LIBCANBUS=ON
+//   -DHAND_CONTROL_USE_HCANBUS=ON
+//
+// If more than one backend is selected the build fails at compile time instead
+// of silently picking one.
+// ============================================================================
+
+// --- normalise the CMake-provided HAND_CONTROL_* macros to USE_* ---
+#if defined(HAND_CONTROL_CANFD_USE_GSUSB) && !defined(USE_GSUSB_CANFD)
+#define USE_GSUSB_CANFD
+#endif
+#if defined(HAND_CONTROL_CANFD_USE_SOCKETCAN) && !defined(USE_SOCKETCAN)
+#define USE_SOCKETCAN
+#endif
+#if defined(HAND_CONTROL_CANFD_USE_LIBCANBUS) && !defined(USE_LIBCANBUS)
+#define USE_LIBCANBUS
+#endif
+#if defined(HAND_CONTROL_CANFD_USE_HCANBUS) && !defined(USE_HCANBUS)
+#define USE_HCANBUS
+#endif
+
+// --- mutual exclusion check ---
+#if (defined(USE_GSUSB_CANFD) + defined(USE_SOCKETCAN) + defined(USE_LIBCANBUS) + \
+     defined(USE_HCANBUS)) > 1
+#error "CANFD backend can only be one of: USE_GSUSB_CANFD / USE_SOCKETCAN / USE_LIBCANBUS / USE_HCANBUS"
+#endif
+
+// --- default backend: gsusb-canfd ---
+#if !defined(USE_GSUSB_CANFD) && !defined(USE_SOCKETCAN) && \
+    !defined(USE_LIBCANBUS) && !defined(USE_HCANBUS)
+#define USE_GSUSB_CANFD
+#endif
+
+// --- platform validity ---
+#if defined(USE_HCANBUS) && !defined(_WIN32)
+#error "USE_HCANBUS is Windows-only; use gsusb-canfd, or socketcan/libcanbus on Linux"
+#endif
+#if (defined(USE_SOCKETCAN) || defined(USE_LIBCANBUS)) && \
+    (defined(_WIN32) || defined(__APPLE__))
+#error "USE_SOCKETCAN / USE_LIBCANBUS are Linux-only; use gsusb-canfd on Windows/macOS"
+#endif
+
 #include <atomic>
 #include <cstdint>
 #include <functional>
@@ -8,10 +64,14 @@
 #include <thread>
 #include <vector>
 
-// Linux backend selection:
-// - default: SocketCAN
-// - define USE_LIBCANBUS to use the HCanbus-compatible libcanbus backend.
-//   CMake option: -DHAND_CONTROL_USE_LIBCANBUS=ON
+#if defined(USE_GSUSB_CANFD)
+// The userspace libusb gs_usb driver only needs a forward declaration here.
+#include <memory>
+
+namespace canfd {
+class CanFdBus;
+}  // namespace canfd
+#endif
 
 using ReceiveCallback = std::function<void(
     uint32_t id, const std::vector<uint8_t>& data, uint64_t timestamp)>;
@@ -41,10 +101,8 @@ class CANFDMaster {
   void resetLostFrames();
 
  private:
-#ifndef _WIN32
-#ifndef USE_LIBCANBUS
+#if defined(USE_SOCKETCAN)
   bool setupCANInterface(const std::string& ifname, int nomBaud, int dataBaud);
-#endif
 #endif
 
   void receiveThreadFunc();
@@ -59,8 +117,10 @@ class CANFDMaster {
   ReceiveCallback receive_callback_;
   uint64_t lost_frames_{0};
 
-#ifndef _WIN32
-#ifdef USE_LIBCANBUS
+#if defined(USE_GSUSB_CANFD)
+  // gsusb-canfd (userspace libusb gs_usb driver) bus handle.
+  std::unique_ptr<canfd::CanFdBus> gsusb_bus_;
+#elif defined(USE_LIBCANBUS)
   void* libcan_handle_;
   void* libusb_handle_;
   int (*fn_CAN_ScanDevice_)();
@@ -77,11 +137,11 @@ class CANFDMaster {
   bool libcanbusSendData(uint32_t id, const std::vector<uint8_t>& data,
                          int externflag);
   void libcanbusReceiveLoop();
-#else
+#elif defined(USE_SOCKETCAN)
   int socket_fd_;
   std::string current_interface_;
 #endif
-#endif
+  // USE_HCANBUS needs no extra members (HCanbus SDK global functions).
 };
 
 #endif  // CANFDMASTER_H

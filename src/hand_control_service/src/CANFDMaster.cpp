@@ -7,7 +7,10 @@
 #include <cstring>
 #include <iostream>
 
-#ifdef _WIN32
+// Backend dispatch: CANFDMaster.h guarantees exactly one of the four macros is
+// defined before this file is compiled.
+
+#if defined(USE_HCANBUS)
 
 // Windows backend: HCanbus SDK.
 #include <HCanbus.h>
@@ -212,9 +215,216 @@ uint64_t CANFDMaster::getLostFrames() const { return lost_frames_; }
 
 void CANFDMaster::resetLostFrames() { lost_frames_ = 0; }
 
-#else
+#elif defined(USE_GSUSB_CANFD)
 
-// Linux backend: SocketCAN by default, or libcanbus when USE_LIBCANBUS is set.
+// Default backend: gsusb-canfd (userspace libusb gs_usb driver, CAN FD capable).
+// Windows / Linux / macOS share this code path.
+#include "canfd/canfd.hpp"
+
+CANFDMaster::CANFDMaster()
+    : dev_index_(-1),
+      nom_baud_(0),
+      data_baud_(0),
+      is_connected_(false),
+      receive_thread_running_(false) {}
+
+CANFDMaster::~CANFDMaster() {
+  if (is_connected_) {
+    disconnect();
+  }
+}
+
+std::vector<std::string> CANFDMaster::scanDevices() {
+  std::vector<std::string> devices;
+  try {
+    const std::vector<canfd::AdapterInfo> adapters = canfd::scanAdapters();
+    for (size_t i = 0; i < adapters.size(); ++i) {
+      // uniqueName(): "name (VID:PID) SN:serial". Keep the index prefix so the
+      // user can select the adapter by scan order.
+      devices.push_back(std::to_string(i) + " " + adapters[i].uniqueName());
+    }
+  } catch (const std::exception& exception) {
+    std::cerr << "gsusb scan failed: " << exception.what() << std::endl;
+  }
+  return devices;
+}
+
+bool CANFDMaster::connect(int deviceIndex, int nomBaud, int dataBaud) {
+  if (is_connected_) {
+    disconnect();
+  }
+
+  try {
+    // Reuse scanDevices() enumeration order to pick the adapter by index, then
+    // open it precisely by vid/pid (+serial).
+    const std::vector<canfd::AdapterInfo> adapters = canfd::scanAdapters();
+    if (deviceIndex < 0 || deviceIndex >= static_cast<int>(adapters.size())) {
+      std::cerr << "gsusb device index out of range: " << deviceIndex
+                << std::endl;
+      return false;
+    }
+
+    const canfd::AdapterInfo& target = adapters[deviceIndex];
+
+    // open(target) prefers the serial (stable across USB ports) and falls back
+    // to the USB bus/address when there is none. channel defaults to 0.
+    gsusb_bus_ = std::make_unique<canfd::CanFdBus>();
+    gsusb_bus_->open(target);
+
+    canfd::BusConfig config;
+    config.bitrate = static_cast<uint32_t>(nomBaud);
+    config.sample_point = 0.80;
+    config.data_bitrate = static_cast<uint32_t>(dataBaud);
+    config.data_sample_point = 0.75;
+    config.fd = true;
+    // We do not echo-tag sends, so enable drop_echo to keep any loopback out of
+    // the receive path.
+    config.drop_echo = true;
+
+    gsusb_bus_->configure(config);
+  } catch (const std::exception& exception) {
+    std::cerr << "gsusb connect failed: " << exception.what() << std::endl;
+    gsusb_bus_.reset();
+    return false;
+  }
+
+  dev_index_ = deviceIndex;
+  nom_baud_ = nomBaud;
+  data_baud_ = dataBaud;
+  is_connected_ = true;
+
+  receive_thread_running_ = true;
+  receive_thread_ = std::thread(&CANFDMaster::receiveThreadFunc, this);
+
+  resetLostFrames();
+  return true;
+}
+
+bool CANFDMaster::disconnect() {
+  if (!is_connected_) {
+    return true;
+  }
+
+  receive_thread_running_ = false;
+  if (receive_thread_.joinable()) {
+    receive_thread_.join();
+  }
+
+  gsusb_bus_.reset();
+  dev_index_ = -1;
+  is_connected_ = false;
+  resetLostFrames();
+  return true;
+}
+
+bool CANFDMaster::attemptReconnect() {
+  const int device_index = dev_index_;
+  const int nom_baud = nom_baud_;
+  const int data_baud = data_baud_;
+  disconnect();
+  return connect(device_index, nom_baud, data_baud);
+}
+
+bool CANFDMaster::sendData(unsigned int id, const unsigned char* data,
+                           unsigned int size, int externflag) {
+  return sendData(static_cast<uint32_t>(id),
+                  std::vector<uint8_t>(data, data + size), externflag);
+}
+
+bool CANFDMaster::sendData(uint32_t id, const std::vector<uint8_t>& data,
+                           int externflag) {
+  if (!is_connected_ || !gsusb_bus_) {
+    return false;
+  }
+
+  canfd::CanFrame frame;
+  frame.id = id;
+  frame.extended = (externflag != 0);
+  frame.fd = true;
+  frame.brs = true;
+  frame.remote = false;
+  // Match the other backends: always send a 64-byte CAN FD frame, with the
+  // real payload in the first copy_size bytes.
+  frame.size = 64;
+
+  const size_t copy_size = std::min(data.size(), size_t(64));
+  if (copy_size > 0) {
+    std::memcpy(frame.data.data(), data.data(), copy_size);
+  }
+
+  try {
+    gsusb_bus_->send(frame);
+    return true;
+  } catch (const std::exception& exception) {
+    std::cerr << "gsusb send failed: " << exception.what() << std::endl;
+    ++lost_frames_;
+    return false;
+  }
+}
+
+void CANFDMaster::setReceiveCallback(ReceiveCallback callback) {
+  receive_callback_ = callback;
+}
+
+void CANFDMaster::receiveThreadFunc() {
+  while (receive_thread_running_) {
+    if (!is_connected_ || !gsusb_bus_) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      continue;
+    }
+
+    // Keep draining frames already buffered by the adapter: gs_usb packs one
+    // frame per USB transfer and the hand feeds back at ~2 kHz. Sleeping after
+    // every frame makes RX fall behind, the adapter FIFO overflows and SDO
+    // replies (e.g. 0x581) get dropped, which surfaces as LER_COMM_RECV after
+    // the 50 ms timeout in initial(). So drain until the queue is empty.
+    for (int drained = 0; drained < 4096 && receive_thread_running_; ++drained) {
+      canfd::CanFrame frame;
+      bool received = false;
+      try {
+        received = gsusb_bus_->receive(
+            frame, std::chrono::milliseconds(drained == 0 ? 20 : 1));
+      } catch (const std::exception& exception) {
+        std::cerr << "gsusb receive failed: " << exception.what() << std::endl;
+        ++lost_frames_;
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        break;
+      }
+      if (!received) {
+        break;
+      }
+
+      // drop_echo is enabled in configure(); loopback frames never reach here.
+      if (!receive_callback_) {
+        continue;
+      }
+      const size_t data_length =
+          std::min(static_cast<size_t>(frame.size), size_t(64));
+      std::vector<uint8_t> rxdata(data_length);
+      if (data_length > 0) {
+        std::memcpy(rxdata.data(), frame.data.data(), data_length);
+      }
+
+      const uint32_t id = frame.extended ? (frame.id & canfd::kCanEffMask)
+                                         : (frame.id & 0x7FFu);
+      const uint64_t timestamp = static_cast<uint64_t>(frame.timestamp * 1e6);
+
+      receive_callback_(id, rxdata, timestamp);
+    }
+  }
+}
+
+bool CANFDMaster::isConnected() const { return is_connected_; }
+
+int CANFDMaster::getCurrentDeviceIndex() const { return dev_index_; }
+
+uint64_t CANFDMaster::getLostFrames() const { return lost_frames_; }
+
+void CANFDMaster::resetLostFrames() { lost_frames_ = 0; }
+
+#elif defined(USE_SOCKETCAN) || defined(USE_LIBCANBUS)
+
+// Linux backends: SocketCAN (USE_SOCKETCAN) or libcanbus (USE_LIBCANBUS).
 #include <dirent.h>
 #ifdef USE_LIBCANBUS
 #include <dlfcn.h>
@@ -783,4 +993,4 @@ uint64_t CANFDMaster::getLostFrames() const { return lost_frames_; }
 
 void CANFDMaster::resetLostFrames() { lost_frames_ = 0; }
 
-#endif  // _WIN32
+#endif  // USE_HCANBUS / USE_GSUSB_CANFD / USE_SOCKETCAN / USE_LIBCANBUS

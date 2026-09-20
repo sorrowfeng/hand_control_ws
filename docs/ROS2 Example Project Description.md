@@ -211,36 +211,60 @@ buses:
 
 The service applies the configured CANFD baudrates at startup.
 
-Linux offers two CANFD backends, **SocketCAN by default**. They are mutually exclusive
-and selected at build time; you cannot switch at runtime.
+Three CANFD backends are available, **gsusb-canfd by default** (userspace libusb
+`gs_usb` driver, cross-platform on Windows / Linux / macOS, full CAN FD support). They
+are mutually exclusive and selected at build time; you cannot switch at runtime.
 
 | Backend | Build flag | Use case |
 | --- | --- | --- |
-| SocketCAN | default (OFF) | Kernel SocketCAN interfaces such as `can0` / `can1` |
-| libcanbus | `-DHAND_CONTROL_USE_LIBCANBUS=ON` | Vendor USB-CANFD adapters that bypass kernel SocketCAN |
+| gsusb-canfd | default (ON) | candleLight / `gs_usb` compatible USB-CANFD adapters; depends on `libusb-1.0` |
+| SocketCAN | `-DHAND_CONTROL_USE_SOCKETCAN=ON` | Kernel SocketCAN interfaces such as `can0` / `can1`, Linux only |
+| libcanbus | `-DHAND_CONTROL_USE_LIBCANBUS=ON` | Vendor USB-CANFD adapters that bypass kernel SocketCAN, Linux only |
+| HCanbus | `-DHAND_CONTROL_USE_HCANBUS=ON` | Vendor HCanbus SDK, Windows only |
 
-#### SocketCAN backend (default)
+#### gsusb-canfd backend (default)
 
-It scans `/sys/class/net` for interfaces starting with `can`; `channel: 0` is the first
-match. The executable needs network capability:
+The source ships in `thirdparty/gsusb-canfd` and is linked in as a static library. It
+needs the `libusb-1.0` development package (`sudo apt install libusb-1.0-0-dev`) and,
+on Linux, a udev rule:
+
+```bash
+sudo cp src/hand_control_service/thirdparty/share/libcanbus/hcanbus.rules \
+  /etc/udev/rules.d/99-hcanbus.rules
+sudo udevadm control --reload-rules && sudo udevadm trigger
+```
+
+A plain build selects this backend:
+
+```bash
+source /opt/ros/humble/setup.bash
+colcon build --symlink-install --packages-select hand_control_service
+```
+
+#### Switching to SocketCAN / libcanbus
+
+```bash
+# SocketCAN
+colcon build --symlink-install --packages-select hand_control_service \
+  --cmake-args -DHAND_CONTROL_USE_SOCKETCAN=ON
+# libcanbus
+colcon build --symlink-install --packages-select hand_control_service \
+  --cmake-args -DHAND_CONTROL_USE_LIBCANBUS=ON
+```
+
+SocketCAN scans `/sys/class/net` for interfaces starting with `can` and needs network
+capability:
 
 ```bash
 sudo setcap cap_net_raw,cap_net_admin+ep \
   install/hand_control_service/lib/hand_control_service/hand_control_service
 ```
 
-#### Switching to libcanbus
-
-```bash
-source /opt/ros/humble/setup.bash
-colcon build --symlink-install --packages-select hand_control_service \
-  --cmake-args -DHAND_CONTROL_USE_LIBCANBUS=ON
-```
-
 > **Clean and rebuild after switching.** The flag is written into `CMakeCache.txt` and
-> generates the `USE_LIBCANBUS` compile definition. Changing it on an existing build tree
-> may not regenerate the definition, leaving you with "flag is ON but the macro is not
-> active". At least remove `build/hand_control_service` and `install/hand_control_service`.
+> generates the matching `HAND_CONTROL_CANFD_USE_*` compile definition. Changing it on an
+> existing build tree may not regenerate the definition, leaving you with "flag is ON but
+> the macro is not active". At least remove `build/hand_control_service` and
+> `install/hand_control_service`.
 
 libcanbus is loaded at runtime via `dlopen` and is not linked, so the build machine does
 not need it but **the runtime machine does**. Lookup order:
@@ -255,13 +279,14 @@ It also depends on `libusb-1.0.so`. Since it bypasses kernel SocketCAN, it needs
 #### Checking which backend is active
 
 ```bash
-grep -n "HAND_CONTROL_USE_LIBCANBUS" build/hand_control_service/CMakeCache.txt
-grep -R --line-number -- "-DUSE_LIBCANBUS" \
+grep -n "HAND_CONTROL_USE_GSUSB_CANFD\|HAND_CONTROL_USE_SOCKETCAN\|HAND_CONTROL_USE_LIBCANBUS" \
+  build/hand_control_service/CMakeCache.txt
+grep -R --line-number -- "-DHAND_CONTROL_CANFD_USE" \
   build/hand_control_service/CMakeFiles/hand_control_service.dir
 ```
 
-Output from the second command means the libcanbus backend is compiled in; it also
-catches the "flag changed but build tree not cleaned" case.
+`HAND_CONTROL_CANFD_USE_GSUSB` in the second output means the gsusb-canfd backend is
+compiled in; it also catches the "flag changed but build tree not cleaned" case.
 
 ### RS485
 
@@ -653,9 +678,21 @@ The usual cause is multiple `/joint_states` publishers, or a stale launch proces
 
 ### CANFD startup fails
 
-The following applies to the default SocketCAN backend. See the next section for libcanbus.
+The default backend is gsusb-canfd. A `libusb_open failed: LIBUSB_ERROR_ACCESS` message
+means the USB adapter is present but not accessible; install the udev rule and replug the
+adapter:
 
-Check:
+```bash
+sudo cp src/hand_control_service/thirdparty/share/libcanbus/hcanbus.rules \
+  /etc/udev/rules.d/99-hcanbus.rules
+sudo udevadm control --reload-rules && sudo udevadm trigger
+```
+
+Use `lsusb` to confirm the adapter is visible (for example
+`a8fa:8598 ... CANFD Analyser`). A "no CANFD channel found" message means no `gs_usb`
+adapter was scanned.
+
+If you use the SocketCAN backend, check:
 
 - The CAN device is detected (`ip link show` lists a `can*` interface).
 - `channel` points to the correct scanned device index.
@@ -667,12 +704,13 @@ Check:
 Startup logs `Failed to load libcanbus.so` or `Failed to load libusb-1.0.so`, meaning the
 build uses the libcanbus backend but the library is missing at runtime.
 
-First confirm the build actually switched. If the flag is ON but `USE_LIBCANBUS` is absent
-from the compile flags, the build tree was not cleaned after switching:
+First confirm the build actually switched. If the flag is ON but
+`HAND_CONTROL_CANFD_USE_LIBCANBUS` is absent from the compile flags, the build tree was not
+cleaned after switching:
 
 ```bash
 grep -n "HAND_CONTROL_USE_LIBCANBUS" build/hand_control_service/CMakeCache.txt
-grep -R --line-number -- "-DUSE_LIBCANBUS" \
+grep -R --line-number -- "-DHAND_CONTROL_CANFD_USE_LIBCANBUS" \
   build/hand_control_service/CMakeFiles/hand_control_service.dir
 ```
 

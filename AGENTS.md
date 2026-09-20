@@ -50,26 +50,33 @@ source /opt/ros/humble/setup.bash
 colcon build --symlink-install
 ```
 
-The repository default for CANFD on Linux is SocketCAN:
+The repository default for CANFD is gsusb-canfd (userspace libusb `gs_usb`),
+which works on Windows, Linux, and macOS:
 
 ```cmake
-HAND_CONTROL_USE_LIBCANBUS=OFF
+HAND_CONTROL_USE_GSUSB_CANFD=ON
 ```
 
-The current SSH deployment environment should use libcanbus explicitly:
+The vendored library lives at
+`src/hand_control_service/thirdparty/gsusb-canfd` and is built as a static
+library via `add_subdirectory`; link it through the `canfd` target. It requires
+`libusb-1.0` development files (`sudo apt install libusb-1.0-0-dev` on Debian /
+Ubuntu, `brew install libusb` on macOS).
 
-```bash
-source /opt/ros/humble/setup.bash
-colcon build --symlink-install --cmake-args -DHAND_CONTROL_USE_LIBCANBUS=ON
-```
+Alternative Linux backends (mutually exclusive, each disables the gsusb default):
 
-After changing this option on an existing build tree, clear at least
+- SocketCAN: `-DHAND_CONTROL_USE_SOCKETCAN=ON`
+- libcanbus: `-DHAND_CONTROL_USE_LIBCANBUS=ON`
+- HCanbus (Windows only): `-DHAND_CONTROL_USE_HCANBUS=ON`
+
+After changing a backend option on an existing build tree, clear at least
 `build/hand_control_service` and `install/hand_control_service`, or clear
 `build/ install/ log/` for a full clean rebuild. Verify the remote build with:
 
 ```bash
-grep -n "HAND_CONTROL_USE_LIBCANBUS" build/hand_control_service/CMakeCache.txt
-grep -R --line-number -- "-DUSE_LIBCANBUS" \
+grep -n "HAND_CONTROL_USE_GSUSB_CANFD\|HAND_CONTROL_USE_LIBCANBUS" \
+  build/hand_control_service/CMakeCache.txt
+grep -R --line-number -- "-DHAND_CONTROL_CANFD_USE_GSUSB" \
   build/hand_control_service/CMakeFiles/hand_control_service.dir
 ```
 
@@ -108,9 +115,14 @@ Topology expectations:
 
 CANFD:
 
-- Linux default in the repository: SocketCAN.
-- Remote hardware environment: build with `HAND_CONTROL_USE_LIBCANBUS=ON`.
-- Runtime macro selected by CMake: `USE_LIBCANBUS`.
+- Repository default: gsusb-canfd (userspace libusb `gs_usb`), built from
+  `src/hand_control_service/thirdparty/gsusb-canfd`.
+- Optional Linux backends: SocketCAN (`-DHAND_CONTROL_USE_SOCKETCAN=ON`) and
+  libcanbus (`-DHAND_CONTROL_USE_LIBCANBUS=ON`); both are mutually exclusive with
+  the gsusb default.
+- Runtime macros selected by CMake: `HAND_CONTROL_CANFD_USE_GSUSB`,
+  `HAND_CONTROL_CANFD_USE_SOCKETCAN`, `HAND_CONTROL_CANFD_USE_LIBCANBUS`,
+  `HAND_CONTROL_CANFD_USE_HCANBUS`.
 
 RS485:
 
@@ -151,7 +163,7 @@ cd /home/plf/Project/RosProject/hand_control_ws
 git fetch origin main
 git pull --ff-only origin main
 source /opt/ros/humble/setup.bash
-colcon build --symlink-install --cmake-args -DHAND_CONTROL_USE_LIBCANBUS=ON
+colcon build --symlink-install
 ```
 
 Useful runtime commands:

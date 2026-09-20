@@ -61,7 +61,59 @@ find_library(HAND_CONTROL_SDK_LIB NAMES ${HC_SDK_LIB_NAME}
   NO_DEFAULT_PATH
 )
 set(HCANBUS_ROOT "" CACHE PATH "Path to HCanbus SDK root containing include and lib directories")
-option(HAND_CONTROL_USE_LIBCANBUS "Use libcanbus backend on Linux instead of SocketCAN" OFF)
+
+# ---------------------------------------------------------------------------
+# CANFD backend selection (default: gsusb-canfd; see src/CANFDMaster.h).
+#
+# gsusb-canfd is the default when no backend is explicitly selected, so CMake
+# only forwards a macro when a non-default backend is chosen. The header macros
+# in CANFDMaster.h remain authoritative when editing the file directly.
+# ---------------------------------------------------------------------------
+option(HAND_CONTROL_USE_GSUSB_CANFD "CANFD backend: gsusb-canfd (userspace libusb gs_usb), default" ON)
+option(HAND_CONTROL_USE_SOCKETCAN   "CANFD backend: Linux SocketCAN" OFF)
+option(HAND_CONTROL_USE_LIBCANBUS   "CANFD backend: vendor libcanbus on Linux" OFF)
+option(HAND_CONTROL_USE_HCANBUS     "CANFD backend: vendor HCanbus on Windows" OFF)
+
+# Selecting any alternative backend automatically releases the default slot.
+if(HAND_CONTROL_USE_SOCKETCAN OR HAND_CONTROL_USE_LIBCANBUS OR HAND_CONTROL_USE_HCANBUS)
+  if(HAND_CONTROL_USE_GSUSB_CANFD)
+    message(STATUS "CANFD: alternative backend selected, disabling default HAND_CONTROL_USE_GSUSB_CANFD")
+    set(HAND_CONTROL_USE_GSUSB_CANFD OFF)
+  endif()
+endif()
+
+set(_hc_canfd_alt)
+foreach(_hc_canfd_opt HAND_CONTROL_USE_SOCKETCAN HAND_CONTROL_USE_LIBCANBUS HAND_CONTROL_USE_HCANBUS)
+  if(${_hc_canfd_opt})
+    list(APPEND _hc_canfd_alt ${_hc_canfd_opt})
+  endif()
+endforeach()
+list(LENGTH _hc_canfd_alt _hc_canfd_alt_count)
+if(_hc_canfd_alt_count GREATER 1)
+  message(FATAL_ERROR "CANFD backend can only be one, currently enabled: ${_hc_canfd_alt}")
+endif()
+if(NOT HAND_CONTROL_USE_GSUSB_CANFD AND _hc_canfd_alt_count EQUAL 0)
+  message(FATAL_ERROR
+    "No CANFD backend available: with HAND_CONTROL_USE_GSUSB_CANFD disabled "
+    "enable one of HAND_CONTROL_USE_SOCKETCAN / HAND_CONTROL_USE_LIBCANBUS (Linux) "
+    "or HAND_CONTROL_USE_HCANBUS (Windows)")
+endif()
+if(HAND_CONTROL_USE_HCANBUS AND NOT WIN32)
+  message(FATAL_ERROR "HAND_CONTROL_USE_HCANBUS is Windows-only")
+endif()
+if((HAND_CONTROL_USE_SOCKETCAN OR HAND_CONTROL_USE_LIBCANBUS) AND (WIN32 OR APPLE))
+  message(FATAL_ERROR "HAND_CONTROL_USE_SOCKETCAN / HAND_CONTROL_USE_LIBCANBUS are Linux-only")
+endif()
+
+# gsusb-canfd: build its static library only, no tools/tests/examples.
+if(HAND_CONTROL_USE_GSUSB_CANFD)
+  set(CANFD_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+  set(CANFD_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+  set(CANFD_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+  set(CANFD_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+  add_subdirectory(thirdparty/gsusb-canfd)
+endif()
+
 # 导出该库给其他包使用
 ament_export_libraries(${HAND_CONTROL_SDK_LIB})
 ament_export_include_directories(${THIRDPARTY_DIR}/include)
@@ -74,7 +126,7 @@ configure_file(
 )
 
 
-add_subdirectory(src/SOEM)
+add_subdirectory(thirdparty/SOEM)
 
 # 添加执行文件
 add_executable(hand_control_service
@@ -89,7 +141,12 @@ add_executable(hand_control_service
 ament_target_dependencies(hand_control_service rclcpp hand_control_interfaces)
 
 # 导出头文件路径
-target_link_libraries(hand_control_service ${HAND_CONTROL_SDK_LIB} soem)
+set(HAND_CONTROL_CANFD_LINK_LIBS)
+if(HAND_CONTROL_USE_GSUSB_CANFD)
+  list(APPEND HAND_CONTROL_CANFD_LINK_LIBS canfd)
+endif()
+target_link_libraries(hand_control_service ${HAND_CONTROL_SDK_LIB} soem
+  ${HAND_CONTROL_CANFD_LINK_LIBS})
 target_include_directories(hand_control_service PUBLIC
     $<BUILD_INTERFACE:${THIRDPARTY_DIR}/include>
 )
@@ -101,16 +158,21 @@ target_compile_definitions(hand_control_service PRIVATE
   "HC_SDK_CLASS=${HC_SDK_CLASS}"
 )
 
-if(WIN32)
+if(HAND_CONTROL_USE_GSUSB_CANFD)
+  target_compile_definitions(hand_control_service PRIVATE HAND_CONTROL_CANFD_USE_GSUSB=1)
+elseif(HAND_CONTROL_USE_SOCKETCAN)
+  target_compile_definitions(hand_control_service PRIVATE HAND_CONTROL_CANFD_USE_SOCKETCAN=1)
+elseif(HAND_CONTROL_USE_LIBCANBUS)
+  target_compile_definitions(hand_control_service PRIVATE HAND_CONTROL_CANFD_USE_LIBCANBUS=1)
+  target_link_libraries(hand_control_service ${CMAKE_DL_LIBS})
+elseif(HAND_CONTROL_USE_HCANBUS)
   if(NOT HCANBUS_ROOT)
-    message(FATAL_ERROR "HCANBUS_ROOT is required on Windows for CANFDMaster, e.g. -DHCANBUS_ROOT=C:/path/to/HCanbus/x64")
+    message(FATAL_ERROR "HCANBUS_ROOT is required for HAND_CONTROL_USE_HCANBUS, e.g. -DHCANBUS_ROOT=C:/path/to/HCanbus/x64")
   endif()
   find_library(HCANBUS_LIB NAMES HCanbus PATHS "${HCANBUS_ROOT}/lib" REQUIRED NO_DEFAULT_PATH)
   target_include_directories(hand_control_service PRIVATE "${HCANBUS_ROOT}/include")
   target_link_libraries(hand_control_service ${HCANBUS_LIB})
-elseif(HAND_CONTROL_USE_LIBCANBUS)
-  target_compile_definitions(hand_control_service PRIVATE USE_LIBCANBUS)
-  target_link_libraries(hand_control_service ${CMAKE_DL_LIBS})
+  target_compile_definitions(hand_control_service PRIVATE HAND_CONTROL_CANFD_USE_HCANBUS=1)
 endif()
 
 # 安装可执行文件

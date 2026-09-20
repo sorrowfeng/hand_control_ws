@@ -1,0 +1,145 @@
+#ifndef CANFD_DEVICE_HPP
+#define CANFD_DEVICE_HPP
+
+#include <chrono>
+#include <cstdint>
+#include <functional>
+#include <memory>
+#include <optional>
+#include <string>
+#include <vector>
+
+#include "canfd/bit_timing.hpp"
+#include "canfd/frame.hpp"
+
+namespace canfd {
+
+constexpr uint16_t kDefaultVid = 0xA8FA;
+constexpr uint16_t kDefaultPid = 0x8598;
+
+/* Passing kAnyVid/kAnyPid selects any gs_usb-looking adapter. */
+constexpr uint16_t kAnyVid = 0;
+constexpr uint16_t kAnyPid = 0;
+
+namespace feature {
+constexpr uint32_t kListenOnly = 1u << 0;
+constexpr uint32_t kLoopback = 1u << 1;
+constexpr uint32_t kOneShot = 1u << 3;
+constexpr uint32_t kHwTimestamp = 1u << 4;
+constexpr uint32_t kFd = 1u << 8;
+constexpr uint32_t kBtConstExt = 1u << 10;
+}  // namespace feature
+
+struct AdapterInfo {
+  uint16_t vendor_id = 0;
+  uint16_t product_id = 0;
+  uint8_t bus = 0;
+  uint8_t address = 0;
+  std::string manufacturer;
+  std::string product;
+  std::string serial;
+
+  /* Short human label: "manufacturer product". */
+  std::string name() const;
+  /* name() plus the USB ids: "manufacturer product (VID:PID)". */
+  std::string displayName() const;
+  /* displayName() plus the serial when present, for a label that identifies this
+     exact unit: "manufacturer product (VID:PID) SN:serial". */
+  std::string uniqueName() const;
+};
+
+struct DeviceSelector {
+  uint16_t vid = kAnyVid;
+  uint16_t pid = kAnyPid;
+  /* 0-based position among the adapters that match the filters below, in libusb
+     enumeration order (not a global device number). When no filter is set,
+     index N is the N-th gs_usb-looking adapter. */
+  int index = 0;
+  uint8_t channel = 0;
+  std::optional<std::string> serial;
+  std::optional<std::string> product;
+  /* Exact USB location; only used when no serial is given. Handy to pin a unit
+     that exposes no serial number within one session. */
+  std::optional<uint8_t> bus;
+  std::optional<uint8_t> address;
+};
+
+struct DeviceInfo {
+  uint32_t icount = 0;
+  uint32_t sw_version = 0;
+  uint32_t hw_version = 0;
+  uint32_t channel_count = 1;
+};
+
+struct BusConfig {
+  uint32_t bitrate = 1'000'000;
+  double sample_point = 0.80;
+  uint32_t data_bitrate = 5'000'000;
+  double data_sample_point = 0.75;
+  bool fd = true;
+  bool listen_only = false;
+  bool loopback = false;
+  bool one_shot = false;
+  bool hw_timestamp = true;
+  /* Drop frames this adapter transmitted back to us (CanFrame::echo == true)
+     from the receive path. Only echo-tagged sends -- send(frame, true) -- can be
+     recognised, so pair this with those. Defaults to false (no behaviour
+     change); set it to true to keep loopbacks out of the normal RX stream. */
+  bool drop_echo = false;
+};
+
+std::vector<AdapterInfo> scanAdapters(uint16_t vid = 0, uint16_t pid = 0);
+
+class CanFdBus {
+ public:
+  using ReceiveCallback = std::function<void(const CanFrame&)>;
+
+  explicit CanFdBus(const DeviceSelector& selector = DeviceSelector{});
+  ~CanFdBus();
+
+  CanFdBus(const CanFdBus&) = delete;
+  CanFdBus& operator=(const CanFdBus&) = delete;
+  CanFdBus(CanFdBus&&) noexcept;
+  CanFdBus& operator=(CanFdBus&&) noexcept;
+
+  void open();
+  /* Open the exact adapter described by `info` (from scanAdapters()). Prefers
+     the serial number; falls back to the USB bus/address when it has none. */
+  void open(const AdapterInfo& info);
+  void configure(const BusConfig& config = BusConfig{});
+  void send(const CanFrame& frame);
+  /* Same, but asks the adapter to echo this frame back as a loopback: the copy
+     arrives from receive() with CanFrame::echo == true, which is the only way
+     to tell your own TX apart from frames addressed to you. Sends untagged by
+     default, so a loopback stays indistinguishable from received traffic unless
+     you opt in here. */
+  void send(const CanFrame& frame, bool echo);
+  bool receive(CanFrame& out,
+               std::chrono::milliseconds timeout = std::chrono::milliseconds(1000));
+
+  void start(ReceiveCallback callback);
+  void stop();
+  void close();
+
+  bool isOpen() const;
+  bool isStarted() const;
+  bool isFd() const;
+
+  const DeviceInfo& deviceInfo() const;
+  uint32_t feature() const;
+  uint32_t clockFrequency() const;
+  uint32_t channelCount() const;
+  uint8_t channel() const;
+  const BitTiming& nominalTiming() const;
+  const BitTiming& dataTiming() const;
+  int inputEndpoint() const;
+  int outputEndpoint() const;
+
+ private:
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
+};
+
+}  // namespace canfd
+
+#endif  // CANFD_DEVICE_HPP

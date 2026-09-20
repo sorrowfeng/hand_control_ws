@@ -22,7 +22,9 @@
         ]
       },
       "common_thirdparty_dirs": [
-        "share/libcanbus"
+        "share/libcanbus",
+        "gsusb-canfd",
+        "SOEM"
       ],
       "forbidden": [
         "Lumi-Dex",
@@ -52,7 +54,9 @@
         ]
       },
       "common_thirdparty_dirs": [
-        "share/libcanbus"
+        "share/libcanbus",
+        "gsusb-canfd",
+        "SOEM"
       ],
       "forbidden": [
         "DH116",
