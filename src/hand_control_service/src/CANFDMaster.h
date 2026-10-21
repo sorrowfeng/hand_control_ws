@@ -2,59 +2,49 @@
 #define CANFDMASTER_H
 
 // ============================================================================
-// CANFD backend selection (compile time, backends are mutually exclusive)
+// CANFD 后端选择（编译期，两个后端互斥）
 // ----------------------------------------------------------------------------
-//   backend              platform            dependency
-//   ------------------   ----------------    --------------------------------
-//   gsusb-canfd (default) Windows/Linux/macOS libusb-1.0 (userspace gs_usb)
-//   SocketCAN            Linux               in-kernel (can0 ...), no extra deps
-//   libcanbus            Linux               /usr/local/lib/libcanbus.so
-//                                             + libusb-1.0.so
-//   HCanbus              Windows             vendor HCanbus SDK
+//   后端                  平台                 依赖
+//   -------------------   ------------------   -------------------------------
+//   gsusb-canfd（默认）   Windows/Linux/macOS  libusb-1.0
+//                                              （Windows 需自备 libusb）
+//   SocketCAN             Linux                内核自带（can0 等），零额外依赖
 //
-// The default backend is gsusb-canfd. Switching is done with the CMake options:
-//   -DHAND_CONTROL_USE_GSUSB_CANFD=ON   <- default
-//   -DHAND_CONTROL_USE_SOCKETCAN=ON
-//   -DHAND_CONTROL_USE_LIBCANBUS=ON
-//   -DHAND_CONTROL_USE_HCANBUS=ON
+// 默认后端是 gsusb-canfd：三平台走同一套 userspace gs_usb 代码路径，行为一致。
 //
-// If more than one backend is selected the build fails at compile time instead
-// of silently picking one.
+// 切换方式（任选其一）:
+//   1) CMake 选项（推荐）
+//        -DHAND_CONTROL_USE_GSUSB_CANFD=ON    ← 默认
+//        -DHAND_CONTROL_USE_SOCKETCAN=ON
+//   2) 手工取消下面对应行的注释（不经 CMake 直接编译本文件时使用）
+//
+// 若同时命中两个后端，编译期直接 #error，不会静默取其一。
 // ============================================================================
 
-// --- normalise the CMake-provided HAND_CONTROL_* macros to USE_* ---
+// #define USE_GSUSB_CANFD
+// #define USE_SOCKETCAN
+
+// --- 归一化: CMake 传来的 HAND_CONTROL_* 宏与历史宏统一到 USE_* 形式 ---
 #if defined(HAND_CONTROL_CANFD_USE_GSUSB) && !defined(USE_GSUSB_CANFD)
 #define USE_GSUSB_CANFD
 #endif
 #if defined(HAND_CONTROL_CANFD_USE_SOCKETCAN) && !defined(USE_SOCKETCAN)
 #define USE_SOCKETCAN
 #endif
-#if defined(HAND_CONTROL_CANFD_USE_LIBCANBUS) && !defined(USE_LIBCANBUS)
-#define USE_LIBCANBUS
-#endif
-#if defined(HAND_CONTROL_CANFD_USE_HCANBUS) && !defined(USE_HCANBUS)
-#define USE_HCANBUS
+
+// --- 互斥校验 ---
+#if (defined(USE_GSUSB_CANFD) + defined(USE_SOCKETCAN)) > 1
+#error "CANFD 后端只能选一个: USE_GSUSB_CANFD / USE_SOCKETCAN"
 #endif
 
-// --- mutual exclusion check ---
-#if (defined(USE_GSUSB_CANFD) + defined(USE_SOCKETCAN) + defined(USE_LIBCANBUS) + \
-     defined(USE_HCANBUS)) > 1
-#error "CANFD backend can only be one of: USE_GSUSB_CANFD / USE_SOCKETCAN / USE_LIBCANBUS / USE_HCANBUS"
-#endif
-
-// --- default backend: gsusb-canfd ---
-#if !defined(USE_GSUSB_CANFD) && !defined(USE_SOCKETCAN) && \
-    !defined(USE_LIBCANBUS) && !defined(USE_HCANBUS)
+// --- 默认后端: gsusb-canfd ---
+#if !defined(USE_GSUSB_CANFD) && !defined(USE_SOCKETCAN)
 #define USE_GSUSB_CANFD
 #endif
 
-// --- platform validity ---
-#if defined(USE_HCANBUS) && !defined(_WIN32)
-#error "USE_HCANBUS is Windows-only; use gsusb-canfd, or socketcan/libcanbus on Linux"
-#endif
-#if (defined(USE_SOCKETCAN) || defined(USE_LIBCANBUS)) && \
-    (defined(_WIN32) || defined(__APPLE__))
-#error "USE_SOCKETCAN / USE_LIBCANBUS are Linux-only; use gsusb-canfd on Windows/macOS"
+// --- 平台合法性 ---
+#if defined(USE_SOCKETCAN) && (defined(_WIN32) || defined(__APPLE__))
+#error "USE_SOCKETCAN 仅支持 Linux；Windows/macOS 请用默认的 gsusb-canfd"
 #endif
 
 #include <atomic>
@@ -65,7 +55,7 @@
 #include <vector>
 
 #if defined(USE_GSUSB_CANFD)
-// The userspace libusb gs_usb driver only needs a forward declaration here.
+// gsusb-canfd(userspace libusb gs_usb 驱动)仅需前向声明，避免污染包含者。
 #include <memory>
 
 namespace canfd {
@@ -118,30 +108,12 @@ class CANFDMaster {
   uint64_t lost_frames_{0};
 
 #if defined(USE_GSUSB_CANFD)
-  // gsusb-canfd (userspace libusb gs_usb driver) bus handle.
+  // gsusb-canfd(userspace libusb gs_usb 驱动)总线句柄。
   std::unique_ptr<canfd::CanFdBus> gsusb_bus_;
-#elif defined(USE_LIBCANBUS)
-  void* libcan_handle_;
-  void* libusb_handle_;
-  int (*fn_CAN_ScanDevice_)();
-  int (*fn_CAN_OpenDevice_)(int, int);
-  int (*fn_CAN_CloseDevice_)(int, int);
-  int (*fn_CANFD_Init_)(int, int, void*);
-  int (*fn_CANFD_Transmit_)(int, int, void*, int, int);
-  int (*fn_CANFD_Receive_)(int, int, void*, int, int);
-
-  bool loadLibCanBus();
-  void unloadLibCanBus();
-  bool libcanbusConnect(int deviceIndex, int nomBaud, int dataBaud);
-  bool libcanbusDisconnect();
-  bool libcanbusSendData(uint32_t id, const std::vector<uint8_t>& data,
-                         int externflag);
-  void libcanbusReceiveLoop();
 #elif defined(USE_SOCKETCAN)
   int socket_fd_;
   std::string current_interface_;
 #endif
-  // USE_HCANBUS needs no extra members (HCanbus SDK global functions).
 };
 
 #endif  // CANFDMASTER_H

@@ -1,0 +1,6 @@
+# USB-CANFD adapter permissions (gs_usb / candleLight compatible).
+# Install:
+#   sudo cp 99-hand-control-usb.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules && sudo udevadm trigger
+
+SUBSYSTEMS=="usb", ATTRS{idVendor}=="a8fa", ATTRS{idProduct}=="8598", GROUP="plugdev", MODE="0666"

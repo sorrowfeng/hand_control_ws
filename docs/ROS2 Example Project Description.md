@@ -211,7 +211,7 @@ buses:
 
 The service applies the configured CANFD baudrates at startup.
 
-Three CANFD backends are available, **gsusb-canfd by default** (userspace libusb
+Two CANFD backends are available, **gsusb-canfd by default** (userspace libusb
 `gs_usb` driver, cross-platform on Windows / Linux / macOS, full CAN FD support). They
 are mutually exclusive and selected at build time; you cannot switch at runtime.
 
@@ -219,8 +219,6 @@ are mutually exclusive and selected at build time; you cannot switch at runtime.
 | --- | --- | --- |
 | gsusb-canfd | default (ON) | candleLight / `gs_usb` compatible USB-CANFD adapters; depends on `libusb-1.0` |
 | SocketCAN | `-DHAND_CONTROL_USE_SOCKETCAN=ON` | Kernel SocketCAN interfaces such as `can0` / `can1`, Linux only |
-| libcanbus | `-DHAND_CONTROL_USE_LIBCANBUS=ON` | Vendor USB-CANFD adapters that bypass kernel SocketCAN, Linux only |
-| HCanbus | `-DHAND_CONTROL_USE_HCANBUS=ON` | Vendor HCanbus SDK, Windows only |
 
 #### gsusb-canfd backend (default)
 
@@ -229,8 +227,8 @@ needs the `libusb-1.0` development package (`sudo apt install libusb-1.0-0-dev`)
 on Linux, a udev rule:
 
 ```bash
-sudo cp src/hand_control_service/thirdparty/share/libcanbus/hcanbus.rules \
-  /etc/udev/rules.d/99-hcanbus.rules
+sudo cp src/hand_control_service/thirdparty/share/99-hand-control-usb.rules \
+  /etc/udev/rules.d/
 sudo udevadm control --reload-rules && sudo udevadm trigger
 ```
 
@@ -241,15 +239,11 @@ source /opt/ros/humble/setup.bash
 colcon build --symlink-install --packages-select hand_control_service
 ```
 
-#### Switching to SocketCAN / libcanbus
+#### Switching to SocketCAN
 
 ```bash
-# SocketCAN
 colcon build --symlink-install --packages-select hand_control_service \
   --cmake-args -DHAND_CONTROL_USE_SOCKETCAN=ON
-# libcanbus
-colcon build --symlink-install --packages-select hand_control_service \
-  --cmake-args -DHAND_CONTROL_USE_LIBCANBUS=ON
 ```
 
 SocketCAN scans `/sys/class/net` for interfaces starting with `can` and needs network
@@ -266,27 +260,30 @@ sudo setcap cap_net_raw,cap_net_admin+ep \
 > the macro is not active". At least remove `build/hand_control_service` and
 > `install/hand_control_service`.
 
-libcanbus is loaded at runtime via `dlopen` and is not linked, so the build machine does
-not need it but **the runtime machine does**. Lookup order:
+SocketCAN uses the kernel `can*` interface and does not need any vendor shared library.
 
-1. Full path from environment variable `HAND_CONTROL_LIBCANBUS_PATH`
-2. `libcanbus.so` through the system loader search path
-3. `/usr/local/lib/libcanbus.so`
+#### Switching back to gsusb-canfd (default)
 
-It also depends on `libusb-1.0.so`. Since it bypasses kernel SocketCAN, it needs neither
-`ip link set up can0` nor the `cap_net_raw` capability.
+Clean and rebuild without any backend flag:
+
+```bash
+rm -rf build/hand_control_service install/hand_control_service
+source /opt/ros/humble/setup.bash
+colcon build --symlink-install --packages-select hand_control_service
+```
 
 #### Checking which backend is active
 
 ```bash
-grep -n "HAND_CONTROL_USE_GSUSB_CANFD\|HAND_CONTROL_USE_SOCKETCAN\|HAND_CONTROL_USE_LIBCANBUS" \
+grep -n "HAND_CONTROL_USE_GSUSB_CANFD\|HAND_CONTROL_USE_SOCKETCAN" \
   build/hand_control_service/CMakeCache.txt
 grep -R --line-number -- "-DHAND_CONTROL_CANFD_USE" \
   build/hand_control_service/CMakeFiles/hand_control_service.dir
 ```
 
 `HAND_CONTROL_CANFD_USE_GSUSB` in the second output means the gsusb-canfd backend is
-compiled in; it also catches the "flag changed but build tree not cleaned" case.
+compiled in; `HAND_CONTROL_CANFD_USE_SOCKETCAN` means SocketCAN. It also catches the
+"flag changed but build tree not cleaned" case.
 
 ### RS485
 
@@ -322,6 +319,8 @@ fallback /dev/tty*
 
 Virtual console devices such as `tty`, `ttyprintk`, and `tty0` are filtered. Standard `ttyS*` ports are added last as a fallback.
 
+Multiple hands on one serial port are scheduled by the SDK `RS485SharedBus`: framing, CRC, transmission timing, and node dispatch stay inside the SDK. The transaction window is derived from the baudrate.
+
 ### EtherCAT
 
 Example:
@@ -338,6 +337,8 @@ hands:
 ```
 
 `channel` is the scanned network interface index. `address` is the SOEM slave ID.
+
+The service registers the EtherCAT CoE SDO callback so `initial()` can auto-detect hand type, side, firmware, and serial number through the mailbox.
 
 ## Multi-Hand Topologies
 
@@ -683,8 +684,8 @@ means the USB adapter is present but not accessible; install the udev rule and r
 adapter:
 
 ```bash
-sudo cp src/hand_control_service/thirdparty/share/libcanbus/hcanbus.rules \
-  /etc/udev/rules.d/99-hcanbus.rules
+sudo cp src/hand_control_service/thirdparty/share/99-hand-control-usb.rules \
+  /etc/udev/rules.d/
 sudo udevadm control --reload-rules && sudo udevadm trigger
 ```
 
@@ -698,35 +699,6 @@ If you use the SocketCAN backend, check:
 - `channel` points to the correct scanned device index.
 - SocketCAN capability is set: `getcap install/hand_control_service/lib/hand_control_service/hand_control_service`.
 - Baudrate configuration matches the device.
-
-### libcanbus backend fails to load
-
-Startup logs `Failed to load libcanbus.so` or `Failed to load libusb-1.0.so`, meaning the
-build uses the libcanbus backend but the library is missing at runtime.
-
-First confirm the build actually switched. If the flag is ON but
-`HAND_CONTROL_CANFD_USE_LIBCANBUS` is absent from the compile flags, the build tree was not
-cleaned after switching:
-
-```bash
-grep -n "HAND_CONTROL_USE_LIBCANBUS" build/hand_control_service/CMakeCache.txt
-grep -R --line-number -- "-DHAND_CONTROL_CANFD_USE_LIBCANBUS" \
-  build/hand_control_service/CMakeFiles/hand_control_service.dir
-```
-
-Confirm the library exists on the runtime machine:
-
-```bash
-ls -l /usr/local/lib/libcanbus.so
-ldconfig -p | grep libusb-1.0
-```
-
-For a non-standard location:
-
-```bash
-export HAND_CONTROL_LIBCANBUS_PATH=/path/to/libcanbus.so
-ros2 launch hand_control_service service.launch.py
-```
 
 ### Tactile topic has no data
 

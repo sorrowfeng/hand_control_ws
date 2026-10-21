@@ -22,7 +22,7 @@
         ]
       },
       "common_thirdparty_dirs": [
-        "share/libcanbus",
+        "share",
         "gsusb-canfd",
         "SOEM"
       ],
@@ -54,7 +54,7 @@
         ]
       },
       "common_thirdparty_dirs": [
-        "share/libcanbus",
+        "share",
         "gsusb-canfd",
         "SOEM"
       ],

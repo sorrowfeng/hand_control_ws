@@ -47,8 +47,10 @@ enum {
 /// @brief 灵巧手类型枚举 / Dexterous hand type enum
 enum {
   LAC_DOF_6 = 0,  ///< 6自由度 / 6 DOF
+  LAC_DOF_6_V2,   ///< 6自由度(V2版本, DH116V2; 行为同 LAC_DOF_6) / 6 DOF (V2 version, DH116V2; same behavior as LAC_DOF_6)
   LAC_DOF_6_S,    ///< 6自由度(S版本) / 6 DOF (S version)
   LAC_DOF_16,  ///< 16自由度（5指×3DOF + 1独立轴） / 16 DOF (5 fingers × 3DOF + 1 independent axis)
+  LAC_DOF_GENERIC,  ///< 通用逐轴控制（不绑定手型，按电机ID直接控制） / Generic per-axis control (not hand-specific, direct motor ID control)
 };
 
 /// @brief 通讯类型枚举 / Communication type enum
@@ -168,6 +170,22 @@ typedef void (*LogAddCallback)(const char*);
 /// @return true-成功 / true on success
 typedef bool (*ECSendDataCallback)(const unsigned char*, unsigned int);
 
+/// @brief EtherCAT SDO 传输回调（CoE 邮箱由用户主站执行）
+///        EtherCAT SDO transfer callback (CoE mailbox executed by user master)
+/// @param index 对象字典索引 / Object dictionary index
+/// @param subindex 子索引 / Subindex
+/// @param is_write 非 0 表示写，0 表示读 / Non-zero = write, 0 = read
+/// @param value 写入值（读时忽略） / Value to write (ignored on read)
+/// @param out_value 读成功时回填的 32 位值（写时可为 nullptr）
+///        out_value: 32-bit value filled on successful read (may be nullptr on write)
+/// @return true-成功 / true on success
+/// @note 仅 LCN_ECAT 使用：SDK 不拥有 CoE 邮箱，SDO 读写、initial() 的
+///       驱动型号/左右手/固件/SN 自识别、save_sdo_drive_param() 都经由该回调。
+///       未注册时 ECAT 的 SDO 行为保持历史状态（初始化跳过自识别）。
+typedef bool (*ECATSdoCallback)(unsigned int index, unsigned char subindex,
+                                int is_write, unsigned int value,
+                                unsigned int* out_value);
+
 /// @brief CANFD 发送数据回调 / CANFD send data callback
 /// @param unsigned int CAN ID
 /// @param const unsigned char* 数据指针 / Data pointer
@@ -197,8 +215,83 @@ typedef bool (*CANSendDataCallback)(unsigned int, const unsigned char*,
 
 /// @brief 前置声明 / Forward declaration
 class LHandProLibPrivate;
+class RS485SharedBusPrivate;
+
+/// @brief 一条物理 RS485 总线的共享调度对象
+///        Shared scheduler for one physical RS485 bus
+///
+/// 多个 LHandProLib 实例可以绑定到同一个 RS485SharedBus。总线对象在 SDK
+/// 内部统一处理发送时序、后台轮询、分包/粘包、CRC 校验和按节点分发。
+/// 应用程序只负责同步写串口，并将收到的原始字节片段送回该对象。
+/// Multiple LHandProLib instances may bind to one RS485SharedBus. The SDK keeps
+/// scheduling, polling, framing, CRC validation, and node dispatch internal.
+class SDK_API RS485SharedBus {
+  L_DECLARE_PRIVATE(RS485SharedBus)
+  friend class LHandProLib;
+
+ public:
+  RS485SharedBus();
+  ~RS485SharedBus();
+
+  RS485SharedBus(const RS485SharedBus&) = delete;
+  RS485SharedBus& operator=(const RS485SharedBus&) = delete;
+
+  /// @brief 设置物理串口发送回调
+  ///        Set the physical serial-port send callback
+  void set_send_callback(RS485SendDataCallback callback);
+
+  /// @brief 设置 std::function 形式的物理串口发送回调
+  ///        Set a std::function based physical serial-port send callback
+  /// @param callback_impl 指向
+  ///        std::function<bool(const unsigned char*, unsigned int)> 的指针
+  ///        Pointer to std::function<bool(const unsigned char*, unsigned int)>
+  void set_send_callback_ex(void* callback_impl);
+
+  /// @brief 输入物理串口收到的原始字节片段
+  ///        Feed a raw byte chunk received from the physical serial port
+  int set_receive_data(const unsigned char* data_ptr, int data_size);
+
+  /// @brief 设置总线事务窗口（毫秒），即相邻两帧发送的最小间隔
+  ///        Set the bus transaction window (ms): the minimum spacing between
+  ///        two consecutive frame transmissions
+  ///
+  /// 该窗口属于整条物理总线，被所有绑定节点共享，默认 30ms。
+  /// 降低串口波特率后必须按帧在线上实际传输时间增大窗口，否则相邻帧会
+  /// 在总线上冲撞导致 CRC 校验失败丢帧。建议值（按最坏 140 字节往返 +
+  /// 约 35% 余量估算）：
+  ///   115200 -> 30（默认）, 57600 -> 40, 38400 -> 60,
+  ///   19200 -> 110, 9600 -> 200, 4800 -> 400
+  /// 修改只影响后续窗口，不打断正在等待的当前窗口；interval_ms <= 0 时忽略。
+  /// The window belongs to the whole physical bus and is shared by all bound
+  /// nodes; default is 30ms. After lowering the baud rate, enlarge the window
+  /// to cover the actual on-wire frame time, otherwise consecutive frames
+  /// collide on the half-duplex bus and get dropped by CRC validation.
+  /// Changes only affect subsequent windows; values <= 0 are ignored.
+  void set_transaction_interval(int interval_ms);
+
+  /// @brief 停止总线工作线程并取消待发送数据
+  ///        Stop the bus worker and cancel pending transmissions
+  void close();
+};
 
 /// @brief LHandProLib类 / LHandProLib class
+///
+/// @par 线程契约 / Threading contract
+/// - 所有配置与控制类 setter（`set_*`、`home_motors`/`move_motors`/`stop_motors`、
+///   `play_gesture`、`apply_motion_params`、SDO/OTA 发送）必须从**同一用户线程**
+///   调用。目标数组按单写者设计，并发 setter 未定义。
+/// - 传输解码（`set_tpdo_data_decode` / `set_canfd_data_decode` /
+///   `set_rs485_data_decode` / `set_can_data_decode` 以及
+///   `RS485SharedBus::set_receive_data`）可在独立接收线程调用。
+/// - 电机快照 getter 与触觉 getter 可与解码并发读取。
+/// - 布局类 API（`set_hand_type` / `set_hand_direction` /
+///   `set_sensor_data_format` / `set_sensor_order`）会改写轴映射、限幅和触觉
+///   布局；应在接收循环启动前调用，或暂停数据流后再调用，避免与解码线程交错。
+/// - All configuration/control setters must run on one user thread (target
+///   arrays are single-writer). Decode APIs may run on a dedicated receive
+///   thread. Snapshot/tactile getters are concurrent-read safe with decode.
+///   Layout APIs should be called before the receive loop starts, or after
+///   pausing the data stream.
 class SDK_API LHandProLib {
   L_DECLARE_PRIVATE(LHandProLib)
  public:
@@ -210,10 +303,36 @@ class SDK_API LHandProLib {
 
   /// @brief 初始化灵巧手驱动程序
   ///        Initialize dexterous hand driver
-  /// @param mode 通讯模式 LCN_ECAT/LCN_CANFD/LCN_485
-  ///        mode: Communication mode LCN_ECAT/LCN_CANFD/LCN_485
-  /// @return 0 - 执行成功, 其他 - 参考错误码
-  ///        0 - Success, others - Refer to error codes
+  /// @param mode 通讯模式 LCN_ECAT/LCN_CANFD/LCN_RS485
+  ///        mode: Communication mode LCN_ECAT/LCN_CANFD/LCN_RS485
+  /// @return 0 - 执行成功, 其他 - 参考错误码; LER_COMM_SEND 表示初始化
+  ///        所需的配置/SDO 帧发送失败(未注册发送回调或传输层写入失败);
+  ///        LER_COMM_RECV 表示设备信息 SDO 读取无应答(设备未连接或超时),
+  ///        此时固件版本/SN 保持默认值(空串), 但 SDK 初始化与后台监控
+  ///        仍已完成, 设备上线后控制调用可正常使用
+  ///        0 - Success, others - Refer to error codes; LER_COMM_SEND indicates
+  ///        the config/SDO frame could not be sent during initialization;
+  ///        LER_COMM_RECV indicates device-info SDO reads timed out (device
+  ///        offline), leaving firmware version/SN at defaults while the SDK
+  ///        is still fully initialized
+  /// @note  CANFD/RS485 模式下会通过 SDO 异步读取驱动型号与左右手并做有限等待,
+  ///        及时到达的识别结果在初始化内生效; 若应答迟到, 将在下一次控制类调用
+  ///        (set_enable/move_motors 等)时自动全量应用。以 SDO 读回来的结果为准:
+  ///        initial() 开始时按会话重新放开识别锁, 因此 initial 之前调用
+  ///        set_hand_type/set_hand_direction 的设置会被识别结果覆盖;
+  ///        initial 返回之后再调用则应用用户设置并锁定, 后续迟到的识别应答不再覆盖。
+  ///        LCN_ECAT 下若已注册 set_ecat_sdo_callback(ex), 则通过 CoE 邮箱
+  ///        同步读取驱动型号/左右手/固件/SN; 未注册时跳过 SDO 读取, 保持
+  ///        旧行为(initial 不报错, 手型使用默认值)。
+  ///        SDO reads for hand type/direction are asynchronous with a bounded
+  ///        wait during initialization; late responses are applied on the next
+  ///        control call. The device response wins: initial() releases the
+  ///        detection lock per session, so a hand type/direction set *before*
+  ///        initial() is overridden by the detected value, while a call made
+  ///        after initial() returns is applied and locks out later detection
+  ///        responses. In LCN_ECAT mode the same detection runs synchronously
+  ///        over CoE when set_ecat_sdo_callback(ex) is registered, and is
+  ///        skipped otherwise.
   /// @example
   ///           [注意] 在调用initial之前, 请先按下方流程进行
   ///           [Note] Before calling initial, please follow the steps below
@@ -225,6 +344,8 @@ class SDK_API LHandProLib {
   ///           3. Handle send data [callback] function, see set_send_rpdo_callback(ex)
   ///           4. 进行接收数据[回调]函数的处理, 详见set_tpdo_data_decode
   ///           4. Handle receive data [callback] function, see set_tpdo_data_decode
+  ///           5. (EtherCAT)SDO 读写回调, 详见set_ecat_sdo_callback(ex)
+  ///           5. (EtherCAT) SDO read/write callback, see set_ecat_sdo_callback(ex)
   ///           5. 对库进行初始化initial(LCN_ECAT)
   ///           5. Initialize the library with initial(LCN_ECAT)
   int initial(int mode);
@@ -273,12 +394,13 @@ class SDK_API LHandProLib {
   /// @example
   ///           // 1. 定义EtherCAT主站对象
   ///           // 1. Define EtherCAT master object
-  ///           auto ec_master_ = std::make_shared<EthercatMaster>();
+  ///           static auto ec_master_ = std::make_shared<EthercatMaster>();
   ///           // 2. 处理EtherCAT发送数据的回调
   ///           // 2. Handle EtherCAT send data callback
+  ///           static int slave_id = 1; // 选择目标从站 / Select target slave
   ///           sdk_handle->set_send_rpdo_callback(
   ///               [](const unsigned char* data, unsigned int size) {
-  ///                 return ec_master_->setOutputs(data, size);
+  ///                 return ec_master_->setSlaveOutputs(slave_id, data, size);
   ///               });
   void set_send_rpdo_callback(ECSendDataCallback callback);
 
@@ -292,9 +414,10 @@ class SDK_API LHandProLib {
   ///           auto ec_master_ = std::make_shared<EthercatMaster>();
   ///           // 2. EtherCAT的发送函数
   ///           // 2. EtherCAT send function
-  ///           auto send_func = [ec_master_](const unsigned char* data,
+  ///           int slave_id = 1; // 选择目标从站 / Select target slave
+  ///           auto send_func = [ec_master_, slave_id](const unsigned char* data,
   ///                                    unsigned int size) {
-  ///             return ec_master_->setOutputs(data, size);
+  ///             return ec_master_->setSlaveOutputs(slave_id, data, size);
   ///           };
   ///           // 3. 使用std::function包装(必须保证该 std::function 对象生命周期长于 LHandProLib 实例)
   ///           // 3. Use std::function wrapper (must ensure the std::function
@@ -304,6 +427,34 @@ class SDK_API LHandProLib {
   ///           // 4. Handle EtherCAT send data callback
   ///           sdk_handle->set_send_rpdo_callback_ex(&func);
   void set_send_rpdo_callback_ex(void* callback_impl);
+
+  /// @brief 注册 EtherCAT SDO 传输回调（CoE 邮箱由用户 SOEM 主站执行）
+  ///        Register the EtherCAT SDO transfer callback
+  /// @param callback 回调函数 / Callback function
+  /// @note 必须在 initial(LCN_ECAT) 之前注册，且主站已 run()（邮箱可用）。
+  ///       注册后 initial() 会通过 SDO 读取驱动型号/左右手/固件/SN，
+  ///       get/set/save_sdo_drive_param() 也走该回调。
+  ///       Must be registered before initial(LCN_ECAT), with the master's
+  ///       exchange loop already running.
+  /// @example
+  ///           std::function<bool(unsigned int, unsigned char, int,
+  ///                              unsigned int, unsigned int*)> sdo =
+  ///               [ec_master_, slave_id](unsigned int index,
+  ///                                      unsigned char subindex, int is_write,
+  ///                                      unsigned int value,
+  ///                                      unsigned int* out_value) {
+  ///                 return is_write
+  ///                     ? ec_master_->sdoWrite((uint16_t)index, subindex, value, slave_id)
+  ///                     : ec_master_->sdoRead((uint16_t)index, subindex, out_value, slave_id);
+  ///               };
+  ///           sdk_handle->set_ecat_sdo_callback_ex(&sdo);
+  void set_ecat_sdo_callback(ECATSdoCallback callback);
+
+  /// @brief 注册 EtherCAT SDO 传输回调（std::function 版本，可捕获 slave_id）
+  ///        Register the EtherCAT SDO transfer callback (std::function version)
+  /// @param callback_impl 函数指针（必须保证该 std::function 对象生命周期长于
+  ///        LHandProLib 实例）
+  void set_ecat_sdo_callback_ex(void* callback_impl);
 
   /// @brief 获取预发送区的 RPDO 数据,如设置了set_send_rpdo_callback(ex)回调,则会同时调用发送
   ///        Get RPDO data in pre-send area, if set_send_rpdo_callback(ex) callback is set, it will call send simultaneously
@@ -421,6 +572,12 @@ class SDK_API LHandProLib {
 
   /// @brief 发送数据回调函数(RS485)
   ///        Send data callback function (RS485)
+  ///
+  /// @note 多设备共用一条物理总线时，应先调用 set_rs485_shared_bus()，并在
+  ///       RS485SharedBus 上设置发送回调。本接口保留用于旧的单设备用法。
+  ///       For multiple devices on one physical bus, call
+  ///       set_rs485_shared_bus() first and configure the callback on
+  ///       RS485SharedBus. This API remains for legacy single-device usage.
   /// @param callback 函数指针
   ///        callback: Function pointer
   /// @example
@@ -438,6 +595,39 @@ class SDK_API LHandProLib {
   /// @param callback_impl 函数指针(必须保证该 std::function 对象生命周期长于 LHandProLib 实例)
   ///        callback_impl: Function pointer (must ensure the std::function object lifetime is longer than LHandProLib instance)
   void set_send_rs485_callback_ex(void* callback_impl);
+
+  /// @brief 绑定共享 RS485 总线；必须在 initial(LCN_RS485, node_id) 前调用
+  ///        Bind a shared RS485 bus; call before initial(LCN_RS485, node_id)
+  /// @param bus 总线对象指针。传入 nullptr 恢复旧的单设备隐式总线模式
+  ///        bus: Bus object pointer. Pass nullptr to use the legacy implicit
+  ///        single-device bus
+  void set_rs485_shared_bus(RS485SharedBus* bus);
+
+  /// @brief 设置 RS485 总线事务窗口（毫秒），供单设备隐式总线用法使用
+  ///        Set the RS485 bus transaction window (ms) for the legacy
+  ///        single-device implicit bus usage
+  ///
+  /// 在 initial(LCN_RS485, node_id) 前后均可调用，默认 30ms。
+  /// 未显式调用本接口时，SDK 会在 RS485 初始化时读取设备波特率并按实测事务
+  /// 时间自动设置窗口，无需手动调整；调用本接口后即固定为该值，不再自动覆盖。
+  /// 降低串口波特率后必须增大窗口（建议值见
+  /// RS485SharedBus::set_transaction_interval 的说明）。
+  /// 若已通过 set_rs485_shared_bus() 绑定外部总线，请直接在
+  /// RS485SharedBus 对象上调用 set_transaction_interval()，本接口的值
+  /// 不会应用到外部总线。
+  /// May be called before or after initial(LCN_RS485, node_id); default is
+  /// 30ms. When not called explicitly, the SDK reads the device baud rate at
+  /// RS485 init and tunes the window automatically; an explicit value pins it.
+  /// Enlarge the window after lowering the baud rate (see
+  /// RS485SharedBus::set_transaction_interval for recommended values).
+  /// When an external bus is bound via set_rs485_shared_bus(), configure the
+  /// window on the RS485SharedBus object instead; this value is not applied
+  /// to the external bus.
+  /// @param interval_ms 事务窗口毫秒数，必须 > 0
+  ///        interval_ms: Transaction window in milliseconds, must be > 0
+  /// @return 0 - 成功，其他 - 错误码
+  ///        0 - Success, others - Error code
+  int set_rs485_transaction_interval(int interval_ms);
 
   /// @brief 获取预发送区的 RS485 完整帧数据（含地址头 + CRC），如设置了set_send_rs485_callback(ex)回调,则会同时调用发送
   ///        Get RS485 complete framed data (with address header + CRC) in pre-send area, if set_send_rs485_callback(ex) callback is set, it will call send simultaneously
@@ -543,8 +733,18 @@ class SDK_API LHandProLib {
   ///        Set dexterous hand type, set according to enum, default LAC_DOF_6
   /// @param hand_type 灵巧手类型
   ///        hand_type: Dexterous hand type
-  /// @return 0 - 执行成功, 其他 - 参考错误码
-  ///        0 - Success, others - Refer to error codes
+  /// @return 0 - 执行成功, 其他 - 参考错误码; LER_COMM_SEND 仅表示配置帧
+  ///        发送失败, 手型状态(限幅/轴映射/传感器布局)已在本地应用
+  ///        0 - Success, others - Refer to error codes; LER_COMM_SEND means only
+  ///        the config frame failed to send while local state was applied
+  /// @note  本调用会在当前会话内锁定手型, 后续迟到的 SDO 自动识别结果不再覆盖。
+  ///        initial() 会按会话重新放开该锁, 因此在 initial 之前调用会被设备
+  ///        应答覆盖(以 SDO 读回来的为准); 需要在识别结果之上强制指定时,
+  ///        请在 initial() 返回之后再调用。
+  ///        The call locks the hand type for the current session so later
+  ///        auto-detection responses cannot override it. initial() releases the
+  ///        lock, so a call made before initial() is overridden by the device
+  ///        response; call it after initial() to force a type.
   /// @example
   ///           sdk_handle->set_hand_type(LAC_DOF_6);
   int set_hand_type(int hand_type);
@@ -566,6 +766,11 @@ class SDK_API LHandProLib {
   ///        dir: LDR_HAND_RIGHT/LDR_HAND_LEFT
   /// @return 0 - 执行成功, 其他 - 参考错误码
   ///        0 - Success, others - Refer to error codes
+  /// @note  锁定语义同 set_hand_type: initial 之前的调用会被 SDO 识别结果覆盖,
+  ///        initial 返回之后的调用才锁定并阻止迟到识别覆盖。
+  ///        Same locking semantics as set_hand_type: a call before initial() is
+  ///        overridden by the SDO detection result, a call after initial()
+  ///        returns locks it out.
   /// @example
   ///           sdk_handle->set_hand_direction(LDR_HAND_RIGHT);
   int set_hand_direction(int dir);
@@ -1067,8 +1272,12 @@ class SDK_API LHandProLib {
   ///        id: Motor ID, [0, DOF=degree of freedom], 0 means broadcast,
   ///       1~DOF表示单个ID设置
   ///        1~DOF means single ID setting
-  /// @return 0 - 执行成功, 其他 - 参考错误码
-  ///        0 - Success, others - Refer to error codes
+  /// @return 0 - 执行成功, 其他 - 参考错误码; 未完成回零时返回
+  ///        LER_NOT_HOME, 且不会修改/清零已设置的目标位置, 回零完成后
+  ///        再次调用即可继续使用原目标
+  ///        0 - Success, others - Refer to error codes; LER_NOT_HOME when
+  ///        homing is incomplete, in which case previously set target
+  ///        positions are kept unchanged
   /// @example
   ///           // 驱动电机1运动
   ///           // Drive motor 1 to move
@@ -1077,6 +1286,24 @@ class SDK_API LHandProLib {
   ///           // Drive all motors to move
   ///           sdk_handle->move_motors();
   int move_motors(int id = 0);
+
+  /// @brief 立即应用目标速度/电流的修改
+  ///        Apply target velocity/current changes immediately
+  ///
+  /// 速度/电流参数默认在下次 move_motors 时自动生效；调用本接口可让其立即
+  /// 生效，之后的 move_motors 只下发位置。仅在参数被修改过时才会实际下发。
+  /// Velocity/current parameters take effect automatically on the next
+  /// move_motors; call this to apply them immediately, after which
+  /// move_motors only sends position. Nothing is sent when no parameter was
+  /// modified.
+  /// @return 0 - 执行成功, 其他 - 参考错误码
+  ///        0 - Success, others - Refer to error codes
+  /// @example
+  ///           sdk_handle->set_angular_velocity(0, 90.0f);
+  ///           sdk_handle->set_max_current(0, 500);
+  ///           sdk_handle->apply_motion_params();  // 速度/电流立即生效
+  ///           sdk_handle->move_motors();          // 只下发位置
+  int apply_motion_params();
 
   /// @brief 停止电机运动
   ///        Stop motor movement
@@ -1097,6 +1324,13 @@ class SDK_API LHandProLib {
 
   /// @brief 执行指定手势
   ///        Execute specified gesture
+  ///
+  /// 手势运动前会自动补发被修改过的目标速度/电流(0x03/0x04 帧),
+  /// 与 move_motors 的补发机制一致,避免回零/急停后设备沿用复位后的
+  /// 默认参数执行手势。
+  /// Before the gesture starts, any modified target velocity/current is
+  /// automatically re-sent (0x03/0x04 frames), same as move_motors, so the
+  /// device does not run the gesture with parameters reset by homing/e-stop.
   /// @param gesture_id 执行的手势id
   ///        gesture_id: Executed gesture id
   /// @param velocity 目标速度, 单位: 当量/秒（即每秒移动的当量数）
@@ -1233,8 +1467,23 @@ class SDK_API LHandProLib {
 
   /// @brief 设置传感器数据格式
   ///        Set sensor data format
-  /// @param format 格式类型, 默认为0
-  ///        format: Format type, default is 0
+  /// @param format 格式类型, 仅支持 0/1, 默认为0; 其他值返回 LER_PARAMETER
+  ///        format: Format type, only 0/1 supported, default is 0; other
+  ///        values return LER_PARAMETER
+  /// @note  format=1 的完整通道+力字段解析需要 ≥24 字节/传感器的帧切片
+  ///        (RS485/CANFD 0x72/0x73/0x74, ECAT 0x40/0x41)。LAC_DOF_6_S 的
+  ///        0x70 帧切片仅 12 字节, 此时只有 10 个通道值有意义, 力字段
+  ///        (NF/TF/DIR/PROX)保持原值不更新。
+  ///        format=1 full channel+force parsing requires frame slices of
+  ///        >=24 bytes per sensor; on LAC_DOF_6_S's 12-byte 0x70 slices only
+  ///        the 10 channel values are meaningful, force fields keep their
+  ///        previous values.
+  /// @note  该格式同时决定 get_finger_pressure 返回值的单位: format=0 时掌心为
+  ///        压力帧(N)、手指为通道归一化帧(无量纲); format=1 时全部为力帧(N)。
+  ///        This format also determines the unit of get_finger_pressure:
+  ///        format=0 gives pressure frames (N) for the palm and normalized
+  ///        channel frames (unitless) for fingers; format=1 gives force
+  ///        frames (N) everywhere.
   /// @return 0 - 执行成功, 其他 - 参考错误码
   ///        0 - Success, others - Refer to error codes
   /// @example
@@ -1285,8 +1534,11 @@ class SDK_API LHandProLib {
   ///        Get tactile sensor pressure value at specified location
   /// @param sensor_id 传感器的id,通过文件顶部的枚举输入
   ///        sensor_id: Sensor ID, input through enum at the top of the file
-  /// @param pressure_list 返回的数组指针,力的范围是[0.0-1.0]
-  ///        pressure_list: Returned array pointer, force range [0.0-1.0]
+  /// @param pressure_list 返回的数组指针, 单位与量程随传感器数据格式变化(见 set_sensor_data_format):
+  ///        压力帧/力帧为 N(牛), 分辨率 0.1N, 量程 [0, 25.5]; 通道归一化帧为无量纲归一化值, 量程 [0, 1]
+  ///        pressure_list: Returned array pointer; unit and range depend on the sensor data format
+  ///        (see set_sensor_data_format): N for pressure/force frames (resolution 0.1N, range [0, 25.5]);
+  ///        unitless normalized value for channel-unit frames (range [0, 1])
   /// @param io_count 返回的数组长度
   ///        io_count: Returned array length
   /// @return 0 - 执行成功, 其他 - 参考错误码
@@ -1317,8 +1569,8 @@ class SDK_API LHandProLib {
   ///        Get tactile sensor normal force at specified location
   /// @param sensor_id 传感器的id,通过文件顶部的枚举输入
   ///        sensor_id: Sensor ID, input through enum at the top of the file
-  /// @param normal_force 返回的法向力,力的范围是[0.0-1.0]
-  ///        normal_force: Returned normal force, force range [0.0-1.0]
+  /// @param normal_force 返回的法向力, 单位 N(牛), 分辨率 0.01N, 量程 [0, 655.35]
+  ///        normal_force: Returned normal force, unit N, resolution 0.01N, range [0, 655.35]
   /// @return 0 - 执行成功, 其他 - 参考错误码
   ///        0 - Success, others - Refer to error codes
   /// @example
@@ -1330,8 +1582,8 @@ class SDK_API LHandProLib {
   ///        Get tactile sensor normal force array at specified location
   /// @param sensor_id 传感器的id,通过文件顶部的枚举输入
   ///        sensor_id: Sensor ID, input through enum at the top of the file
-  /// @param normal_force_list 返回的法向力数组指针,力的范围是[0.0-1.0]
-  ///        normal_force_list: Returned normal force array pointer, force range [0.0-1.0]
+  /// @param normal_force_list 返回的法向力数组指针, 单位 N(牛), 分辨率 0.01N, 量程 [0, 655.35]
+  ///        normal_force_list: Returned normal force array pointer, unit N, resolution 0.01N, range [0, 655.35]
   /// @param io_count 返回的数组长度
   ///        io_count: Returned array length
   /// @return 0 - 执行成功, 其他 - 参考错误码
@@ -1353,8 +1605,8 @@ class SDK_API LHandProLib {
   ///        Get tactile sensor tangential force at specified location
   /// @param sensor_id 传感器的id,通过文件顶部的枚举输入
   ///        sensor_id: Sensor ID, input through enum at the top of the file
-  /// @param tangential_force 返回的切向力,力的范围是[0.0-1.0]
-  ///        tangential_force: Returned tangential force, force range [0.0-1.0]
+  /// @param tangential_force 返回的切向力, 单位 N(牛), 分辨率 0.01N, 量程 [0, 655.35]
+  ///        tangential_force: Returned tangential force, unit N, resolution 0.01N, range [0, 655.35]
   /// @return 0 - 执行成功, 其他 - 参考错误码
   ///        0 - Success, others - Refer to error codes
   /// @example
@@ -1367,8 +1619,8 @@ class SDK_API LHandProLib {
   ///        Get tactile sensor tangential force array at specified location
   /// @param sensor_id 传感器的id,通过文件顶部的枚举输入
   ///        sensor_id: Sensor ID, input through enum at the top of the file
-  /// @param tangential_force_list 返回的切向力数组指针,力的范围是[0.0-1.0]
-  ///        tangential_force_list: Returned tangential force array pointer, force range [0.0-1.0]
+  /// @param tangential_force_list 返回的切向力数组指针, 单位 N(牛), 分辨率 0.01N, 量程 [0, 655.35]
+  ///        tangential_force_list: Returned tangential force array pointer, unit N, resolution 0.01N, range [0, 655.35]
   /// @param io_count 返回的数组长度
   ///        io_count: Returned array length
   /// @return 0 - 执行成功, 其他 - 参考错误码
@@ -1504,9 +1756,15 @@ class SDK_API LHandProLib {
   /// @brief 获取 OTA 固件升级应答数据
   ///        Get OTA firmware upgrade response data
   /// @param data 接收缓冲区指针，传入 null 时仅通过 io_count 返回所需长度
-  ///        data: Receive buffer pointer; pass null to query required length via io_count
-  /// @param io_count 传入时为缓冲区容量，返回时为实际写入字节数
-  ///        io_count: Input as buffer capacity, output as actual bytes written
+  ///        （查询模式不读取 io_count 的传入值，无需预先初始化）
+  ///        data: Receive buffer pointer; pass null to query required length
+  ///        via io_count (query mode never reads the incoming io_count value,
+  ///        so it needs no prior initialization)
+  /// @param io_count 拷贝模式传入时为缓冲区容量（必须非负），返回时为实际
+  ///        写入字节数；查询模式为纯输出
+  ///        io_count: In copy mode, input as buffer capacity (must be
+  ///        non-negative) and output as actual bytes written; pure output in
+  ///        query mode
   /// @return 0 - 执行成功, 其他 - 参考错误码
   ///        0 - Success, others - Refer to error codes
   int get_ota_recv_data(unsigned char* data, int* io_count);

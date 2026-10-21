@@ -21,7 +21,7 @@
 
 #include "CANFDMaster.h"
 #include "EthercatMaster.h"
-#include "RS485Master.h"
+#include "SerialPort.h"
 
 #include "hand_control_interfaces/msg/hand_joint_state.hpp"
 #include "hand_control_interfaces/msg/tactile_state.hpp"
@@ -304,10 +304,8 @@ class HandDevice {
     sdk_->set_send_canfd_callback_ex(&canfd_send_function_);
   }
 
-  void setRs485SendFunction(
-      std::function<bool(const unsigned char*, unsigned int)> func) {
-    rs485_send_function_ = std::move(func);
-    sdk_->set_send_rs485_callback_ex(&rs485_send_function_);
+  void setRs485SharedBus(HC_SDK_NS::RS485SharedBus* bus) {
+    sdk_->set_rs485_shared_bus(bus);
   }
 
   void setEthercatSendFunction(
@@ -316,7 +314,19 @@ class HandDevice {
     sdk_->set_send_rpdo_callback_ex(&ethercat_send_function_);
   }
 
+  void setEthercatSdoFunction(
+      std::function<bool(unsigned int, unsigned char, int, unsigned int,
+                         unsigned int*)> func) {
+    ethercat_sdo_function_ = std::move(func);
+    sdk_->set_ecat_sdo_callback_ex(&ethercat_sdo_function_);
+  }
+
   bool initialize(BusType type, rclcpp::Logger logger) {
+    // 总线重连后会重新绑定并再次初始化同一个 SDK 实例，先关闭旧会话。
+    if (initialized_) {
+      sdk_->close();
+      initialized_ = false;
+    }
     sdk_->set_hand_type(hand_type_);
 
     int result = HC_SDK_NS::LER_NONE;
@@ -354,11 +364,6 @@ class HandDevice {
   void decodeCanfd(uint32_t id, const uint8_t* data, int size) {
     if (!initialized_ || !data || size <= 0) return;
     sdk_->set_canfd_data_decode(id, data, size);
-  }
-
-  void decodeRs485(const uint8_t* data, int size) {
-    if (!initialized_ || !data || size <= 0) return;
-    sdk_->set_rs485_data_decode(data, size);
   }
 
   void decodeEthercat(const uint8_t* data, int size) {
@@ -635,9 +640,11 @@ class HandDevice {
   std::vector<bool> has_last_now_angle_;
   std::function<bool(unsigned int, const unsigned char*, unsigned int, int)>
       canfd_send_function_;
-  std::function<bool(const unsigned char*, unsigned int)> rs485_send_function_;
   std::function<bool(const unsigned char*, unsigned int)>
       ethercat_send_function_;
+  std::function<bool(unsigned int, unsigned char, int, unsigned int,
+                     unsigned int*)>
+      ethercat_sdo_function_;
   bool tactile_enabled_{false};
   std::unordered_map<int, int> cell_count_cache_;
 };
@@ -673,7 +680,9 @@ class BusBase : public std::enable_shared_from_this<BusBase> {
 
   void addHand(const std::shared_ptr<HandDevice>& hand) {
     std::lock_guard<std::mutex> lock(hands_mutex_);
-    hands_.push_back(hand);
+    if (std::find(hands_.begin(), hands_.end(), hand) == hands_.end()) {
+      hands_.push_back(hand);
+    }
   }
 
   BusConfig config_;
@@ -762,10 +771,12 @@ class Rs485Bus : public BusBase {
   ~Rs485Bus() override { stop(); }
 
   bool start(rclcpp::Logger logger) override {
-    if (master_ && master_->isConnected()) return true;
+    if (port_ && port_->isOpen() && shared_bus_) return true;
 
-    master_ = std::make_shared<RS485Master>();
-    auto devices = master_->scanDevices();
+    // 上一次连接可能只建立了一半，先清理再重试。
+    stop();
+
+    const auto devices = SerialPort::scanAvailablePorts();
     if (devices.empty()) {
       RCLCPP_ERROR(logger, "[%s] 未找到 RS485 串口", name().c_str());
       return false;
@@ -777,48 +788,80 @@ class Rs485Bus : public BusBase {
       return false;
     }
 
-    if (!master_->connect(config_.channel, config_.rs485_baudrate)) {
-      RCLCPP_ERROR(logger, "[%s] RS485 连接失败", name().c_str());
+    port_ = std::make_shared<SerialPort>();
+    if (!port_->open(devices[config_.channel],
+                     static_cast<uint32_t>(config_.rs485_baudrate))) {
+      RCLCPP_ERROR(logger, "[%s] RS485 连接失败: %s", name().c_str(),
+                   devices[config_.channel].c_str());
+      port_.reset();
       return false;
     }
 
-    master_->setReceiveCallback([this](const uint8_t* data, size_t size) {
-      for (const auto& hand : attachedHands()) {
-        hand->decodeRs485(data, static_cast<int>(size));
+    shared_bus_ = std::make_shared<HC_SDK_NS::RS485SharedBus>();
+    rs485_send_ = [this](const unsigned char* data, unsigned int size) {
+      return port_ && port_->write(reinterpret_cast<const uint8_t*>(data), size);
+    };
+    shared_bus_->set_send_callback_ex(&rs485_send_);
+    const int interval_ms = transactionIntervalMs(config_.rs485_baudrate);
+    shared_bus_->set_transaction_interval(interval_ms);
+
+    port_->setReadCallback([this](const uint8_t* data, size_t size) {
+      if (shared_bus_) {
+        shared_bus_->set_receive_data(data, static_cast<int>(size));
       }
     });
 
-    RCLCPP_INFO(logger, "[%s] RS485 已连接: channel=%d baudrate=%d",
-                name().c_str(), config_.channel, config_.rs485_baudrate);
+    RCLCPP_INFO(logger,
+                "[%s] RS485 已连接: channel=%d port=%s baudrate=%d interval=%dms",
+                name().c_str(), config_.channel,
+                devices[config_.channel].c_str(), config_.rs485_baudrate,
+                interval_ms);
     return true;
   }
 
   void stop() override {
-    if (master_) {
-      master_->disconnect();
+    // 先关闭手并解除共享总线绑定，确保 SDK 不会在总线销毁后继续访问它。
+    for (const auto& hand : attachedHands()) {
+      hand->setRs485SharedBus(nullptr);
+      hand->close();
     }
+    if (shared_bus_) {
+      shared_bus_->close();
+      shared_bus_.reset();
+    }
+    if (port_) {
+      port_->close();
+      port_.reset();
+    }
+    rs485_send_ = nullptr;
   }
 
   bool isAlive() const override {
-    return master_ && master_->isConnected();
+    return port_ && port_->isOpen() && shared_bus_;
   }
 
   bool attachHand(const std::shared_ptr<HandDevice>& hand,
                   rclcpp::Logger logger) override {
     if (!isAlive()) return false;
     hand->setBus(shared_from_this(), type());
-    hand->setRs485SendFunction(
-        [this](const unsigned char* data, unsigned int size) {
-          std::lock_guard<std::mutex> lock(send_mutex_);
-          return master_ && master_->sendData(data, size);
-        });
+    hand->setRs485SharedBus(shared_bus_.get());
     addHand(hand);
     return hand->initialize(type(), logger);
   }
 
  private:
-  std::shared_ptr<RS485Master> master_;
-  std::mutex send_mutex_;
+  static int transactionIntervalMs(int baudrate) {
+    // 与 SDK 文档建议值一致：波特率越低，帧在线上占用时间越长。
+    if (baudrate <= 9600) return 200;
+    if (baudrate <= 19200) return 110;
+    if (baudrate <= 38400) return 60;
+    if (baudrate <= 57600) return 40;
+    return 30;
+  }
+
+  std::shared_ptr<SerialPort> port_;
+  std::function<bool(const unsigned char*, unsigned int)> rs485_send_;
+  std::shared_ptr<HC_SDK_NS::RS485SharedBus> shared_bus_;
 };
 
 class EthercatBus : public BusBase {
@@ -885,6 +928,22 @@ class EthercatBus : public BusBase {
     hand->setEthercatSendFunction(
         [this, slave_id](const unsigned char* data, unsigned int size) {
           return master_ && master_->setSlaveOutputs(slave_id, data, size);
+        });
+    // 新版 SDK 的 EtherCAT 初始化会通过 CoE SDO 自识别手型/左右手/固件/SN。
+    // 邮箱归 SOEM 主站所有，必须把 SDO 请求转交给 EthercatMaster。
+    hand->setEthercatSdoFunction(
+        [this, slave_id](unsigned int index, unsigned char subindex,
+                         int is_write, unsigned int value,
+                         unsigned int* out_value) {
+          if (!master_) return false;
+          if (is_write) {
+            return master_->sdoWrite(static_cast<uint16_t>(index), subindex,
+                                     static_cast<uint32_t>(value), slave_id);
+          }
+          if (!out_value) return false;
+          return master_->sdoRead(static_cast<uint16_t>(index), subindex,
+                                  reinterpret_cast<uint32_t*>(out_value),
+                                  slave_id);
         });
     addHand(hand);
     return hand->initialize(type(), logger);
@@ -1888,13 +1947,21 @@ struct HandControlService::Impl {
 
   void checkAndReconnect() {
     for (auto& item : buses_) {
-      if (!item.second->isAlive()) {
-        RCLCPP_WARN(logger(), "[%s] 总线异常，尝试重连", item.first.c_str());
-        item.second->restart(logger());
-        // 总线复位后传感单元数量可能变化，清掉缓存让下一帧重新探测。
-        for (auto& hand_item : hands_) {
-          hand_item.second->invalidateTactileCache();
+      if (item.second->isAlive()) continue;
+
+      RCLCPP_WARN(logger(), "[%s] 总线异常，尝试重连", item.first.c_str());
+      if (!item.second->restart(logger())) continue;
+
+      // 总线重连后必须重新绑定并初始化该总线上的手：RS485 的共享总线对象、
+      // EtherCAT 的 SOEM 主站都是新建的，旧 SDK 会话不能继续使用。
+      for (auto& hand_item : hands_) {
+        const auto& hand = hand_item.second;
+        if (hand->busName() != item.first) continue;
+        if (!item.second->attachHand(hand, logger())) {
+          RCLCPP_ERROR(logger(), "[%s] 重连后重新初始化失败",
+                       hand->name().c_str());
         }
+        hand->invalidateTactileCache();
       }
     }
   }

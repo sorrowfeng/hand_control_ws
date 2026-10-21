@@ -66,20 +66,21 @@ library via `add_subdirectory`; link it through the `canfd` target. It requires
 `libusb-1.0` development files (`sudo apt install libusb-1.0-0-dev` on Debian /
 Ubuntu, `brew install libusb` on macOS).
 
-Alternative Linux backends (mutually exclusive, each disables the gsusb default):
+Optional Linux backend (mutually exclusive with the gsusb default):
 
 - SocketCAN: `-DHAND_CONTROL_USE_SOCKETCAN=ON`
-- libcanbus: `-DHAND_CONTROL_USE_LIBCANBUS=ON`
-- HCanbus (Windows only): `-DHAND_CONTROL_USE_HCANBUS=ON`
+
+The checked-in `LHandProLib` binaries are Linux aarch64; `LumiDex11SLib` is still
+x86-64. Build on a matching target architecture or replace the SDK binaries first.
 
 After changing a backend option on an existing build tree, clear at least
 `build/hand_control_service` and `install/hand_control_service`, or clear
 `build/ install/ log/` for a full clean rebuild. Verify the remote build with:
 
 ```bash
-grep -n "HAND_CONTROL_USE_GSUSB_CANFD\|HAND_CONTROL_USE_LIBCANBUS" \
+grep -n "HAND_CONTROL_USE_GSUSB_CANFD\|HAND_CONTROL_USE_SOCKETCAN" \
   build/hand_control_service/CMakeCache.txt
-grep -R --line-number -- "-DHAND_CONTROL_CANFD_USE_GSUSB" \
+grep -R --line-number -- "-DHAND_CONTROL_CANFD_USE" \
   build/hand_control_service/CMakeFiles/hand_control_service.dir
 ```
 
@@ -120,17 +121,24 @@ CANFD:
 
 - Repository default: gsusb-canfd (userspace libusb `gs_usb`), built from
   `src/hand_control_service/thirdparty/gsusb-canfd`.
-- Optional Linux backends: SocketCAN (`-DHAND_CONTROL_USE_SOCKETCAN=ON`) and
-  libcanbus (`-DHAND_CONTROL_USE_LIBCANBUS=ON`); both are mutually exclusive with
-  the gsusb default.
-- Runtime macros selected by CMake: `HAND_CONTROL_CANFD_USE_GSUSB`,
-  `HAND_CONTROL_CANFD_USE_SOCKETCAN`, `HAND_CONTROL_CANFD_USE_LIBCANBUS`,
-  `HAND_CONTROL_CANFD_USE_HCANBUS`.
+- Optional Linux backend: SocketCAN (`-DHAND_CONTROL_USE_SOCKETCAN=ON`),
+  mutually exclusive with the gsusb default.
+- Runtime macros selected by CMake: `HAND_CONTROL_CANFD_USE_GSUSB` or
+  `HAND_CONTROL_CANFD_USE_SOCKETCAN`.
 
 RS485:
 
 - Serial scanning should prioritize `/dev/ttyXR*`.
 - Other common serial patterns remain supported after that.
+- `SerialPort` is the physical serial wrapper; multi-node buses use the SDK's
+  `RS485SharedBus` for framing, CRC, scheduling, and node dispatch.
+- Configure the shared-bus transaction interval from the baudrate (30 ms for
+  500000 and above, larger for slower rates).
+
+EtherCAT:
+
+- The service registers `set_ecat_sdo_callback_ex` so the SDK can use the
+  SOEM CoE mailbox during `initial()` for hand type/side/firmware/SN detection.
 
 ## Realtime State
 

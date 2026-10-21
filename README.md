@@ -255,14 +255,12 @@ ros2 launch hand_control_service service.launch.py \
 
 ### CANFD
 
-CANFD 有三种后端，**默认使用 gsusb-canfd**（用户态 libusb 的 `gs_usb` 驱动，Windows / Linux / macOS 通用，完整支持 CAN FD）。该库为开源项目：[sorrowfeng/gsusb-canfd](https://github.com/sorrowfeng/gsusb-canfd)。后端在编译期四选一，由构建开关决定，运行时不能切换。
+CANFD 有两种后端，**默认使用 gsusb-canfd**（用户态 libusb 的 `gs_usb` 驱动，Windows / Linux / macOS 通用，完整支持 CAN FD）。该库为开源项目：[sorrowfeng/gsusb-canfd](https://github.com/sorrowfeng/gsusb-canfd)。后端在编译期二选一，由构建开关决定，运行时不能切换。
 
 | 后端 | 构建开关 | 适用场景 |
 | --- | --- | --- |
 | gsusb-canfd | 默认（ON） | candleLight / `gs_usb` 兼容 USB-CANFD 适配器，三平台同一套代码，依赖 `libusb-1.0` |
 | SocketCAN | `-DHAND_CONTROL_USE_SOCKETCAN=ON` | 内核 SocketCAN 接口，即 `can0` / `can1`，仅 Linux |
-| libcanbus | `-DHAND_CONTROL_USE_LIBCANBUS=ON` | 厂商 USB-CANFD 适配器，仅 Linux |
-| HCanbus | `-DHAND_CONTROL_USE_HCANBUS=ON` | 厂商 HCanbus SDK，仅 Windows |
 
 各后端共用同一份总线配置，`channel` 和波特率的写法没有区别：
 
@@ -290,11 +288,11 @@ sudo apt install libusb-1.0-0-dev
 brew install libusb
 ```
 
-适配器需要绑定 WinUSB（Windows）或具备 USB 访问权限（Linux）。Linux 上建议安装 udev 规则（`thirdparty/share/libcanbus/hcanbus.rules`），否则会打印 `libusb_open failed: LIBUSB_ERROR_ACCESS`：
+适配器需要绑定 WinUSB（Windows）或具备 USB 访问权限（Linux）。Linux 上建议安装 udev 规则（`thirdparty/share/99-hand-control-usb.rules`），否则会打印 `libusb_open failed: LIBUSB_ERROR_ACCESS`：
 
 ```bash
-sudo cp src/hand_control_service/thirdparty/share/libcanbus/hcanbus.rules \
-  /etc/udev/rules.d/99-hcanbus.rules
+sudo cp src/hand_control_service/thirdparty/share/99-hand-control-usb.rules \
+  /etc/udev/rules.d/
 sudo udevadm control --reload-rules && sudo udevadm trigger
 ```
 
@@ -322,14 +320,6 @@ colcon build --symlink-install --packages-select hand_control_service \
   --cmake-args -DHAND_CONTROL_USE_SOCKETCAN=ON
 ```
 
-#### 切换到 libcanbus 后端
-
-```bash
-source /opt/ros/humble/setup.bash
-colcon build --symlink-install --packages-select hand_control_service \
-  --cmake-args -DHAND_CONTROL_USE_LIBCANBUS=ON
-```
-
 > **切换后必须清理再重建。** 开关会写入 `CMakeCache.txt` 并生成对应的 `HAND_CONTROL_CANFD_USE_*` 编译宏。在已有构建树上直接改选项，CMake 不一定重新生成宏定义，容易出现「开关是 ON、但代码里宏没生效」的假象。至少清理：
 >
 > ```bash
@@ -338,20 +328,7 @@ colcon build --symlink-install --packages-select hand_control_service \
 >
 > 保险起见直接全清：`rm -rf build install log`。
 
-libcanbus 在运行时通过 `dlopen` 加载，不参与链接，所以构建机上可以不装这个库，但**运行机上必须有**。库按以下顺序查找：
-
-1. 环境变量 `HAND_CONTROL_LIBCANBUS_PATH` 指向的完整路径
-2. `libcanbus.so`（走系统动态库搜索路径）
-3. `/usr/local/lib/libcanbus.so`
-
-装在非标准位置时直接指定：
-
-```bash
-export HAND_CONTROL_LIBCANBUS_PATH=/path/to/libcanbus.so
-ros2 launch hand_control_service service.launch.py
-```
-
-该后端同时依赖 `libusb-1.0.so`，一般系统自带；缺失时启动会打印 `Failed to load libusb-1.0.so`。
+SocketCAN 后端直接使用内核 `can*` 接口，不依赖额外的厂商动态库。
 
 #### 切回 gsusb-canfd（默认）
 
@@ -368,7 +345,7 @@ colcon build --symlink-install --packages-select hand_control_service
 看构建缓存里的开关值：
 
 ```bash
-grep -n "HAND_CONTROL_USE_GSUSB_CANFD\|HAND_CONTROL_USE_SOCKETCAN\|HAND_CONTROL_USE_LIBCANBUS" \
+grep -n "HAND_CONTROL_USE_GSUSB_CANFD\|HAND_CONTROL_USE_SOCKETCAN" \
   build/hand_control_service/CMakeCache.txt
 ```
 
@@ -379,7 +356,7 @@ grep -R --line-number -- "-DHAND_CONTROL_CANFD_USE" \
   build/hand_control_service/CMakeFiles/hand_control_service.dir
 ```
 
-输出里出现 `HAND_CONTROL_CANFD_USE_GSUSB` 即为 gsusb-canfd 后端，`HAND_CONTROL_CANFD_USE_SOCKETCAN` / `HAND_CONTROL_CANFD_USE_LIBCANBUS` 同理。
+输出里出现 `HAND_CONTROL_CANFD_USE_GSUSB` 即为 gsusb-canfd 后端，出现 `HAND_CONTROL_CANFD_USE_SOCKETCAN` 即为 SocketCAN 后端。
 
 ### RS485
 
@@ -412,6 +389,8 @@ buses:
     rs485_baudrate: 500000
 ```
 
+同一条 RS485 总线上挂多只手时，服务端使用 SDK 的共享总线调度：发送时序、分包/粘包、CRC 校验和按节点分发都由 SDK 统一处理，不需要为每只手单独打开串口。总线事务窗口会按波特率自动设置（500000 及以上默认 30 ms，波特率越低窗口越大）。
+
 ### EtherCAT
 
 EtherCAT 使用 SOEM。`channel` 对应扫描到的网卡索引，`address` 对应从站号。
@@ -422,6 +401,8 @@ buses:
     type: ethercat
     channel: 0
 ```
+
+服务端会把 EtherCAT 主站的 CoE SDO 读写转交给 SDK，因此 `initial()` 可以自动读出手型、左右手、固件版本和 SN；如果 SDO 邮箱不可用，SDK 会跳过自识别并在日志中给出初始化错误。
 
 ## 多手配置
 
@@ -901,8 +882,8 @@ ros2 topic echo --once /tf
 说明 USB 适配器存在但没有访问权限，安装 udev 规则后重新插拔适配器：
 
 ```bash
-sudo cp src/hand_control_service/thirdparty/share/libcanbus/hcanbus.rules \
-  /etc/udev/rules.d/99-hcanbus.rules
+sudo cp src/hand_control_service/thirdparty/share/99-hand-control-usb.rules \
+  /etc/udev/rules.d/
 sudo udevadm control --reload-rules && sudo udevadm trigger
 ```
 
@@ -927,32 +908,6 @@ getcap install/hand_control_service/lib/hand_control_service/hand_control_servic
 sudo setcap cap_net_raw,cap_net_admin+ep \
   install/hand_control_service/lib/hand_control_service/hand_control_service
 ```
-
-### libcanbus 后端加载失败
-
-启动日志打印 `Failed to load libcanbus.so` 或 `Failed to load libusb-1.0.so`，
-说明构建用的是 libcanbus 后端，但运行时没找到库。
-
-先确认构建确实切到了该后端。若开关是 ON 但编译参数里查不到
-`HAND_CONTROL_CANFD_USE_LIBCANBUS` 宏，说明切换时没清理构建产物，需要清理后重建。
-验证方法见「CANFD」章节。
-
-确认运行机上存在库文件：
-
-```bash
-ls -l /usr/local/lib/libcanbus.so
-ldconfig -p | grep libusb-1.0
-```
-
-库不在标准位置时用环境变量指定：
-
-```bash
-export HAND_CONTROL_LIBCANBUS_PATH=/path/to/libcanbus.so
-ros2 launch hand_control_service service.launch.py
-```
-
-该后端不经过内核 SocketCAN，因此不需要 `ip link set up can0`，也不需要给可执行
-文件设置 `cap_net_raw` 权限。
 
 ### 触觉话题没有数据
 
@@ -1072,7 +1027,7 @@ source install/setup.bash
 src/hand_control_service/thirdparty/
   include/       厂商 SDK 头文件
   lib/           厂商 SDK 动态库
-  share/         厂商工具、udev 规则、libcanbus 等
+  share/         udev 规则等运行辅助文件
   gsusb-canfd/   CANFD 默认后端源码（静态编译进服务）
   SOEM/          EtherCAT 主站库源码（静态编译进服务）
 ```
@@ -1083,7 +1038,7 @@ src/hand_control_service/thirdparty/
 | SOEM | EtherCAT 主站协议栈 | 内置源码，构建为静态库 `soem` |
 | 厂商 SDK | 手部协议、触觉传感器等 | `include/` + `lib/`，由 vendor 打包流程提供 |
 
-`share/` 保留了厂商 SDK 手册、CANFD/RS485/EtherCAT 参考示例，以及 libcanbus、udev 规则等运行辅助文件。
+`share/` 保留 USB-CANFD 适配器的 udev 规则等运行辅助文件。
 
 ## 开发提示
 

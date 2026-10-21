@@ -6,219 +6,24 @@
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <thread>
 
-// Backend dispatch: CANFDMaster.h guarantees exactly one of the four macros is
-// defined before this file is compiled.
-
-#if defined(USE_HCANBUS)
-
-// Windows backend: HCanbus SDK.
-#include <HCanbus.h>
+// 后端分派：由 CANFDMaster.h 的互斥检查保证下方两个分支恰好命中一个。
+// 分支顺序不影响结果（各条件互斥），此处保持与历史文件一致的排列顺序。
 
 namespace {
-
-constexpr char kDlcToLength[] = {0, 1, 2, 3, 4, 5, 6, 7,
-                                 8, 12, 16, 20, 24, 32, 48, 64};
-
-char lengthToDlc(char length) {
-  if (length <= 8) return length;
-  if (length <= 12) return 9;
-  if (length <= 16) return 10;
-  if (length <= 20) return 11;
-  if (length <= 24) return 12;
-  if (length <= 32) return 13;
-  if (length <= 48) return 14;
-  return 15;
-}
-
+// 断开与重连之间的延时(ms)：设备复位(如 OTA 进入 bootloader)后，USB-CAN
+// 适配器/USB 句柄需要一点时间才能重新打开，立即重连常失败。保持与 Python
+// 版 controller_canfd.attempt_reconnect(delay_s) 一致。
+constexpr int kCanfdReconnectDelayMs = 200;
 }  // namespace
 
-CANFDMaster::CANFDMaster()
-    : dev_index_(-1),
-      nom_baud_(0),
-      data_baud_(0),
-      is_connected_(false),
-      receive_thread_running_(false) {}
 
-CANFDMaster::~CANFDMaster() {
-  if (is_connected_) {
-    disconnect();
-  }
-}
+#if defined(USE_GSUSB_CANFD)
 
-std::vector<std::string> CANFDMaster::scanDevices() {
-  std::vector<std::string> devices;
-
-  const int dev_count = CAN_ScanDevice();
-  for (int i = 0; i < dev_count; ++i) {
-    Dev_Info info;
-    if (CAN_ReadDevInfo(i, &info) == 0) {
-      devices.push_back(std::to_string(i) + " " + std::string(info.HW_Type));
-    } else {
-      devices.push_back(std::to_string(i));
-    }
-  }
-
-  return devices;
-}
-
-bool CANFDMaster::connect(int deviceIndex, int nomBaud, int dataBaud) {
-  if (is_connected_) {
-    disconnect();
-  }
-
-  if (CAN_OpenDevice(deviceIndex) != 0) {
-    return false;
-  }
-
-  CanFD_Config cancfg;
-  memset(&cancfg, 0, sizeof(cancfg));
-  cancfg.Model = 0;
-  cancfg.NomBaud = nomBaud;
-  cancfg.DatBaud = dataBaud;
-  cancfg.Config = 0x0001 | 0x0002 | 0x0004;
-  cancfg.Cantype = 1;
-
-  cancfg.NomPre = 2;
-  cancfg.NomTseg1 = 31;
-  cancfg.NomTseg2 = 8;
-  cancfg.NomSJW = 5;
-
-  cancfg.DatPre = 1;
-  cancfg.DatTseg1 = 11;
-  cancfg.DatTseg2 = 4;
-  cancfg.DatSJW = 2;
-
-  if (CANFD_Init(deviceIndex, &cancfg) != 0) {
-    CAN_CloseDevice(deviceIndex);
-    return false;
-  }
-
-  dev_index_ = deviceIndex;
-  nom_baud_ = nomBaud;
-  data_baud_ = dataBaud;
-  is_connected_ = true;
-
-  receive_thread_running_ = true;
-  receive_thread_ = std::thread(&CANFDMaster::receiveThreadFunc, this);
-
-  resetLostFrames();
-  return true;
-}
-
-bool CANFDMaster::disconnect() {
-  if (!is_connected_) {
-    return true;
-  }
-
-  receive_thread_running_ = false;
-  if (receive_thread_.joinable()) {
-    receive_thread_.join();
-  }
-
-  const int device_index = dev_index_;
-  const int ret = CAN_CloseDevice(device_index);
-  if (ret == 0) {
-    dev_index_ = -1;
-    is_connected_ = false;
-    resetLostFrames();
-    return true;
-  }
-
-  return false;
-}
-
-bool CANFDMaster::attemptReconnect() {
-  const int device_index = dev_index_;
-  const int nom_baud = nom_baud_;
-  const int data_baud = data_baud_;
-  disconnect();
-  return connect(device_index, nom_baud, data_baud);
-}
-
-bool CANFDMaster::sendData(unsigned int id, const unsigned char* data,
-                           unsigned int size, int externflag) {
-  return sendData(static_cast<uint32_t>(id),
-                  std::vector<uint8_t>(data, data + size), externflag);
-}
-
-bool CANFDMaster::sendData(uint32_t id, const std::vector<uint8_t>& data,
-                           int externflag) {
-  if (!is_connected_) {
-    return false;
-  }
-
-  CanFD_Msg msg;
-  memset(&msg, 0, sizeof(msg));
-  msg.DLC = lengthToDlc(64);
-  msg.ExternFlag = externflag;
-  msg.RemoteFlag = 0;
-  msg.ID = id;
-  msg.FrameType = 0x04;
-
-  const size_t copy_size = std::min(data.size(), size_t(64));
-  memcpy(msg.Data, data.data(), copy_size);
-
-  const int ret = CANFD_Transmit(dev_index_, &msg, 1, 100);
-  const bool success = (ret == 1);
-  if (!success) {
-    ++lost_frames_;
-  }
-  return success;
-}
-
-void CANFDMaster::setReceiveCallback(ReceiveCallback callback) {
-  receive_callback_ = callback;
-}
-
-void CANFDMaster::receiveThreadFunc() {
-  while (receive_thread_running_) {
-    if (!is_connected_) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
-      continue;
-    }
-
-    CanFD_Msg msgs[500];
-    const int count = CANFD_Receive(dev_index_, msgs, 500, 50);
-
-    if (count > 0 && receive_callback_) {
-      for (int i = 0; i < count; ++i) {
-        const CanFD_Msg& msg = msgs[i];
-        const int data_length = msg.DLC < 16 ? kDlcToLength[msg.DLC] : 64;
-
-        std::vector<uint8_t> rxdata(data_length);
-        memcpy(rxdata.data(), msg.Data, data_length);
-
-        if (msg.ErrSatus != 0) {
-          ++lost_frames_;
-        }
-
-        receive_callback_(msg.ID, rxdata, msg.TimeStamp);
-      }
-    } else if (count < 0) {
-      ++lost_frames_;
-    }
-
-    if (lost_frames_ > (1 << 20)) {
-      lost_frames_ = 0;
-    }
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(5));
-  }
-}
-
-bool CANFDMaster::isConnected() const { return is_connected_; }
-
-int CANFDMaster::getCurrentDeviceIndex() const { return dev_index_; }
-
-uint64_t CANFDMaster::getLostFrames() const { return lost_frames_; }
-
-void CANFDMaster::resetLostFrames() { lost_frames_ = 0; }
-
-#elif defined(USE_GSUSB_CANFD)
-
-// Default backend: gsusb-canfd (userspace libusb gs_usb driver, CAN FD capable).
-// Windows / Linux / macOS share this code path.
+// 默认后端: gsusb-canfd(userspace libusb gs_usb 驱动,支持 CAN FD)。
+// Windows / Linux / macOS 共用这一段——库内没有任何平台条件编译,
+// 三平台走同一条代码路径。Windows 上需自备 libusb-1.0。
 #include "canfd/canfd.hpp"
 
 CANFDMaster::CANFDMaster()
@@ -239,8 +44,8 @@ std::vector<std::string> CANFDMaster::scanDevices() {
   try {
     const std::vector<canfd::AdapterInfo> adapters = canfd::scanAdapters();
     for (size_t i = 0; i < adapters.size(); ++i) {
-      // uniqueName(): "name (VID:PID) SN:serial". Keep the index prefix so the
-      // user can select the adapter by scan order.
+      // 库提供 uniqueName(): "name (VID:PID) SN:serial"。index 仍由本工程
+      // 自己带上,便于用户按扫描顺序选择。
       devices.push_back(std::to_string(i) + " " + adapters[i].uniqueName());
     }
   } catch (const std::exception& exception) {
@@ -255,8 +60,8 @@ bool CANFDMaster::connect(int deviceIndex, int nomBaud, int dataBaud) {
   }
 
   try {
-    // Reuse scanDevices() enumeration order to pick the adapter by index, then
-    // open it precisely by vid/pid (+serial).
+    // 复用 scanDevices() 的枚举顺序按索引定位适配器,再以 vid/pid(+serial)
+    // 精确打开,避免只识别厂商默认 VID/PID。
     const std::vector<canfd::AdapterInfo> adapters = canfd::scanAdapters();
     if (deviceIndex < 0 || deviceIndex >= static_cast<int>(adapters.size())) {
       std::cerr << "gsusb device index out of range: " << deviceIndex
@@ -266,8 +71,8 @@ bool CANFDMaster::connect(int deviceIndex, int nomBaud, int dataBaud) {
 
     const canfd::AdapterInfo& target = adapters[deviceIndex];
 
-    // open(target) prefers the serial (stable across USB ports) and falls back
-    // to the USB bus/address when there is none. channel defaults to 0.
+    // 按扫描结果精确打开该适配器:库内部优先用 serial(跨端口稳定),无 serial
+    // 时回退 USB bus/address。channel 默认 0——本型号适配器为单通道。
     gsusb_bus_ = std::make_unique<canfd::CanFdBus>();
     gsusb_bus_->open(target);
 
@@ -277,8 +82,8 @@ bool CANFDMaster::connect(int deviceIndex, int nomBaud, int dataBaud) {
     config.data_bitrate = static_cast<uint32_t>(dataBaud);
     config.data_sample_point = 0.75;
     config.fd = true;
-    // We do not echo-tag sends, so enable drop_echo to keep any loopback out of
-    // the receive path.
+    // 本工程不 echo-tag 发送(send(frame) 默认),回环帧不由本机产生;开启
+    // drop_echo 让库在接收路径直接丢弃任何 echo-tagged 回环。
     config.drop_echo = true;
 
     gsusb_bus_->configure(config);
@@ -322,6 +127,9 @@ bool CANFDMaster::attemptReconnect() {
   const int nom_baud = nom_baud_;
   const int data_baud = data_baud_;
   disconnect();
+  // 断开后稍等再重连：设备复位后适配器/USB 句柄需要一点时间才能重新打开。
+  std::this_thread::sleep_for(
+      std::chrono::milliseconds(kCanfdReconnectDelayMs));
   return connect(device_index, nom_baud, data_baud);
 }
 
@@ -343,8 +151,7 @@ bool CANFDMaster::sendData(uint32_t id, const std::vector<uint8_t>& data,
   frame.fd = true;
   frame.brs = true;
   frame.remote = false;
-  // Match the other backends: always send a 64-byte CAN FD frame, with the
-  // real payload in the first copy_size bytes.
+  // 与其它后端一致:固定发送 64 字节 CAN FD 帧,实际数据在前 copy_size 字节。
   frame.size = 64;
 
   const size_t copy_size = std::min(data.size(), size_t(64));
@@ -373,11 +180,10 @@ void CANFDMaster::receiveThreadFunc() {
       continue;
     }
 
-    // Keep draining frames already buffered by the adapter: gs_usb packs one
-    // frame per USB transfer and the hand feeds back at ~2 kHz. Sleeping after
-    // every frame makes RX fall behind, the adapter FIFO overflows and SDO
-    // replies (e.g. 0x581) get dropped, which surfaces as LER_COMM_RECV after
-    // the 50 ms timeout in initial(). So drain until the queue is empty.
+    // 连续排空适配器已缓存的帧: gs_usb 每个 USB 包只承载 1 帧, 而灵巧手
+    // 反馈流约 2kHz; 若每收一帧就 sleep(1ms), 接收线程永远追不上到达速率,
+    // 适配器 RX FIFO 持续溢出, SDO 应答(如 0x581)会被随机丢弃, 使
+    // initial() 在 50ms 超时后报 LER_COMM_RECV。改为“队列不空就接着收”。
     for (int drained = 0; drained < 4096 && receive_thread_running_; ++drained) {
       canfd::CanFrame frame;
       bool received = false;
@@ -394,7 +200,8 @@ void CANFDMaster::receiveThreadFunc() {
         break;
       }
 
-      // drop_echo is enabled in configure(); loopback frames never reach here.
+      // drop_echo 已在 configure() 中开启,回环帧由库的接收路径丢弃,
+      // 这里不会收到 echo 帧。
       if (!receive_callback_) {
         continue;
       }
@@ -407,6 +214,8 @@ void CANFDMaster::receiveThreadFunc() {
 
       const uint32_t id = frame.extended ? (frame.id & canfd::kCanEffMask)
                                          : (frame.id & 0x7FFu);
+      // 库现在保证 timestamp 始终有效(取不到硬件时间戳时回退宿主单调时钟),
+      // 直接换算成微秒即可。
       const uint64_t timestamp = static_cast<uint64_t>(frame.timestamp * 1e6);
 
       receive_callback_(id, rxdata, timestamp);
@@ -422,13 +231,11 @@ uint64_t CANFDMaster::getLostFrames() const { return lost_frames_; }
 
 void CANFDMaster::resetLostFrames() { lost_frames_ = 0; }
 
-#elif defined(USE_SOCKETCAN) || defined(USE_LIBCANBUS)
+#elif defined(USE_SOCKETCAN)
 
-// Linux backends: SocketCAN (USE_SOCKETCAN) or libcanbus (USE_LIBCANBUS).
+// Linux 可选后端: SocketCAN。
 #include <dirent.h>
-#ifdef USE_LIBCANBUS
-#include <dlfcn.h>
-#endif
+#include <fcntl.h>
 #include <linux/can.h>
 #include <linux/can/raw.h>
 #include <net/if.h>
@@ -437,42 +244,8 @@ void CANFDMaster::resetLostFrames() { lost_frames_ = 0; }
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <unistd.h>
+#include <cerrno>
 
-#ifdef USE_LIBCANBUS
-
-#pragma pack(push, 1)
-struct LibCanFD_Config {
-  unsigned int NomBaud;
-  unsigned int DatBaud;
-  unsigned short NomPre;
-  unsigned char NomTseg1;
-  unsigned char NomTseg2;
-  unsigned char NomSJW;
-  unsigned char DatPre;
-  unsigned char DatTseg1;
-  unsigned char DatTseg2;
-  unsigned char DatSJW;
-  unsigned char Config;
-  unsigned char Model;
-  unsigned char Cantype;
-};
-
-struct LibCanFD_Msg {
-  unsigned int ID;
-  unsigned int TimeStamp;
-  unsigned char FrameType;
-  unsigned char DLC;
-  unsigned char ExternFlag;
-  unsigned char RemoteFlag;
-  unsigned char BusSatus;
-  unsigned char ErrSatus;
-  unsigned char TECounter;
-  unsigned char RECounter;
-  unsigned char Data[64];
-};
-#pragma pack(pop)
-
-#endif  // USE_LIBCANBUS
 
 CANFDMaster::CANFDMaster()
     : dev_index_(-1),
@@ -480,18 +253,7 @@ CANFDMaster::CANFDMaster()
       data_baud_(0),
       is_connected_(false),
       receive_thread_running_(false),
-#ifdef USE_LIBCANBUS
-      libcan_handle_(nullptr),
-      libusb_handle_(nullptr),
-      fn_CAN_ScanDevice_(nullptr),
-      fn_CAN_OpenDevice_(nullptr),
-      fn_CAN_CloseDevice_(nullptr),
-      fn_CANFD_Init_(nullptr),
-      fn_CANFD_Transmit_(nullptr),
-      fn_CANFD_Receive_(nullptr)
-#else
       socket_fd_(-1)
-#endif
 {
 }
 
@@ -499,12 +261,8 @@ CANFDMaster::~CANFDMaster() {
   if (is_connected_) {
     disconnect();
   }
-#ifdef USE_LIBCANBUS
-  unloadLibCanBus();
-#endif
 }
 
-#ifndef USE_LIBCANBUS
 bool CANFDMaster::setupCANInterface(const std::string& ifname, int nomBaud,
                                     int dataBaud) {
   std::string cmd = "ip link set " + ifname + " down";
@@ -520,116 +278,11 @@ bool CANFDMaster::setupCANInterface(const std::string& ifname, int nomBaud,
 
   return true;
 }
-#endif
 
-#ifdef USE_LIBCANBUS
-bool CANFDMaster::loadLibCanBus() {
-  if (libcan_handle_) {
-    return true;
-  }
-
-  auto open_first = [](const std::vector<std::string>& candidates, int flags,
-                       std::string* opened_path) -> void* {
-    for (const auto& path : candidates) {
-      if (path.empty()) continue;
-      void* handle = dlopen(path.c_str(), flags);
-      if (handle) {
-        if (opened_path) *opened_path = path;
-        return handle;
-      }
-    }
-    return nullptr;
-  };
-
-  std::vector<std::string> libusb_candidates;
-  if (const char* path = std::getenv("HAND_CONTROL_LIBUSB_PATH")) {
-    libusb_candidates.emplace_back(path);
-  }
-  libusb_candidates.emplace_back("libusb-1.0.so");
-  libusb_candidates.emplace_back("/usr/local/lib/libusb-1.0.so");
-  libusb_candidates.emplace_back("/usr/lib/x86_64-linux-gnu/libusb-1.0.so");
-
-  std::string libusb_path;
-  libusb_handle_ = open_first(libusb_candidates, RTLD_NOW | RTLD_GLOBAL,
-                              &libusb_path);
-  if (!libusb_handle_) {
-    std::cerr << "Failed to load libusb-1.0.so" << std::endl;
-    return false;
-  }
-
-  std::vector<std::string> libcanbus_candidates;
-  if (const char* path = std::getenv("HAND_CONTROL_LIBCANBUS_PATH")) {
-    libcanbus_candidates.emplace_back(path);
-  }
-  libcanbus_candidates.emplace_back("libcanbus.so");
-  libcanbus_candidates.emplace_back("/usr/local/lib/libcanbus.so");
-
-  std::string libcanbus_path;
-  libcan_handle_ =
-      open_first(libcanbus_candidates, RTLD_NOW, &libcanbus_path);
-  if (!libcan_handle_) {
-    std::cerr << "Failed to load libcanbus.so" << std::endl;
-    dlclose(libusb_handle_);
-    libusb_handle_ = nullptr;
-    return false;
-  }
-
-  fn_CAN_ScanDevice_ =
-      reinterpret_cast<int (*)()>(dlsym(libcan_handle_, "CAN_ScanDevice"));
-  fn_CAN_OpenDevice_ = reinterpret_cast<int (*)(int, int)>(
-      dlsym(libcan_handle_, "CAN_OpenDevice"));
-  fn_CAN_CloseDevice_ = reinterpret_cast<int (*)(int, int)>(
-      dlsym(libcan_handle_, "CAN_CloseDevice"));
-  fn_CANFD_Init_ = reinterpret_cast<int (*)(int, int, void*)>(
-      dlsym(libcan_handle_, "CANFD_Init"));
-  fn_CANFD_Transmit_ = reinterpret_cast<int (*)(int, int, void*, int, int)>(
-      dlsym(libcan_handle_, "CANFD_Transmit"));
-  fn_CANFD_Receive_ = reinterpret_cast<int (*)(int, int, void*, int, int)>(
-      dlsym(libcan_handle_, "CANFD_Receive"));
-
-  if (!fn_CAN_ScanDevice_ || !fn_CAN_OpenDevice_ || !fn_CAN_CloseDevice_ ||
-      !fn_CANFD_Init_ || !fn_CANFD_Transmit_ || !fn_CANFD_Receive_) {
-    std::cerr << "Failed to resolve libcanbus symbols" << std::endl;
-    unloadLibCanBus();
-    return false;
-  }
-
-  return true;
-}
-
-void CANFDMaster::unloadLibCanBus() {
-  fn_CAN_ScanDevice_ = nullptr;
-  fn_CAN_OpenDevice_ = nullptr;
-  fn_CAN_CloseDevice_ = nullptr;
-  fn_CANFD_Init_ = nullptr;
-  fn_CANFD_Transmit_ = nullptr;
-  fn_CANFD_Receive_ = nullptr;
-
-  if (libcan_handle_) {
-    dlclose(libcan_handle_);
-    libcan_handle_ = nullptr;
-  }
-  if (libusb_handle_) {
-    dlclose(libusb_handle_);
-    libusb_handle_ = nullptr;
-  }
-}
-#endif  // USE_LIBCANBUS
 
 std::vector<std::string> CANFDMaster::scanDevices() {
   std::vector<std::string> devices;
 
-#ifdef USE_LIBCANBUS
-  if (!loadLibCanBus()) {
-    std::cerr << "Failed to load libcanbus library" << std::endl;
-    return devices;
-  }
-
-  const int count = fn_CAN_ScanDevice_();
-  for (int i = 0; i < count; ++i) {
-    devices.push_back("libcanbus device " + std::to_string(i));
-  }
-#else
   DIR* dir = opendir("/sys/class/net");
   if (dir == nullptr) {
     return devices;
@@ -643,7 +296,6 @@ std::vector<std::string> CANFDMaster::scanDevices() {
     }
   }
   closedir(dir);
-#endif
 
   return devices;
 }
@@ -657,12 +309,6 @@ bool CANFDMaster::connect(int deviceIndex, int nomBaud, int dataBaud) {
   nom_baud_ = nomBaud;
   data_baud_ = dataBaud;
 
-#ifdef USE_LIBCANBUS
-  if (!libcanbusConnect(deviceIndex, nomBaud, dataBaud)) {
-    dev_index_ = -1;
-    return false;
-  }
-#else
   std::vector<std::string> devices = scanDevices();
   if (deviceIndex < 0 || deviceIndex >= static_cast<int>(devices.size())) {
     dev_index_ = -1;
@@ -685,6 +331,12 @@ bool CANFDMaster::connect(int deviceIndex, int nomBaud, int dataBaud) {
     dev_index_ = -1;
     current_interface_.clear();
     return false;
+  }
+
+  // 读取路径用 select 等待 + 非阻塞 drain，避免高速反馈时丢帧。
+  const int fd_flags = fcntl(socket_fd_, F_GETFL, 0);
+  if (fd_flags >= 0) {
+    fcntl(socket_fd_, F_SETFL, fd_flags | O_NONBLOCK);
   }
 
   int enable_canfd = 1;
@@ -724,7 +376,6 @@ bool CANFDMaster::connect(int deviceIndex, int nomBaud, int dataBaud) {
     current_interface_.clear();
     return false;
   }
-#endif
 
   is_connected_ = true;
   receive_thread_running_ = true;
@@ -734,59 +385,6 @@ bool CANFDMaster::connect(int deviceIndex, int nomBaud, int dataBaud) {
   return true;
 }
 
-#ifdef USE_LIBCANBUS
-bool CANFDMaster::libcanbusConnect(int deviceIndex, int nomBaud,
-                                   int dataBaud) {
-  if (!loadLibCanBus()) {
-    std::cerr << "Failed to load libcanbus library" << std::endl;
-    return false;
-  }
-
-  int ret = fn_CAN_OpenDevice_(deviceIndex, 0);
-  if (ret != 0) {
-    std::cerr << "CAN_OpenDevice failed, error: " << ret << std::endl;
-    return false;
-  }
-
-  LibCanFD_Config cfg;
-  memset(&cfg, 0, sizeof(cfg));
-  cfg.NomBaud = nomBaud;
-  cfg.DatBaud = dataBaud;
-  cfg.Config = 0x01 | 0x02 | 0x04;
-  cfg.Cantype = 1;
-  cfg.Model = 0;
-
-  cfg.NomPre = 2;
-  cfg.NomTseg1 = 31;
-  cfg.NomTseg2 = 8;
-  cfg.NomSJW = 5;
-
-  cfg.DatPre = 1;
-  cfg.DatTseg1 = 11;
-  cfg.DatTseg2 = 4;
-  cfg.DatSJW = 2;
-
-  ret = fn_CANFD_Init_(deviceIndex, 0, &cfg);
-  if (ret != 0) {
-    std::cerr << "CANFD_Init failed, error: " << ret << std::endl;
-    fn_CAN_CloseDevice_(deviceIndex, 0);
-    return false;
-  }
-
-  return true;
-}
-
-bool CANFDMaster::libcanbusDisconnect() {
-  if (dev_index_ >= 0 && fn_CAN_CloseDevice_) {
-    const int ret = fn_CAN_CloseDevice_(dev_index_, 0);
-    if (ret != 0) {
-      std::cerr << "CAN_CloseDevice failed, error: " << ret << std::endl;
-      return false;
-    }
-  }
-  return true;
-}
-#endif  // USE_LIBCANBUS
 
 bool CANFDMaster::disconnect() {
   if (!is_connected_) {
@@ -798,15 +396,11 @@ bool CANFDMaster::disconnect() {
     receive_thread_.join();
   }
 
-#ifdef USE_LIBCANBUS
-  libcanbusDisconnect();
-#else
   if (socket_fd_ >= 0) {
     close(socket_fd_);
     socket_fd_ = -1;
   }
   current_interface_.clear();
-#endif
 
   dev_index_ = -1;
   is_connected_ = false;
@@ -819,6 +413,9 @@ bool CANFDMaster::attemptReconnect() {
   const int nom_baud = nom_baud_;
   const int data_baud = data_baud_;
   disconnect();
+  // 断开后稍等再重连：设备复位后适配器/USB 句柄需要一点时间才能重新打开。
+  std::this_thread::sleep_for(
+      std::chrono::milliseconds(kCanfdReconnectDelayMs));
   return connect(device_index, nom_baud, data_baud);
 }
 
@@ -834,9 +431,6 @@ bool CANFDMaster::sendData(uint32_t id, const std::vector<uint8_t>& data,
     return false;
   }
 
-#ifdef USE_LIBCANBUS
-  return libcanbusSendData(id, data, externflag);
-#else
   if (socket_fd_ < 0) {
     return false;
   }
@@ -858,50 +452,20 @@ bool CANFDMaster::sendData(uint32_t id, const std::vector<uint8_t>& data,
     ++lost_frames_;
   }
   return success;
-#endif
 }
 
-#ifdef USE_LIBCANBUS
-bool CANFDMaster::libcanbusSendData(uint32_t id,
-                                    const std::vector<uint8_t>& data,
-                                    int externflag) {
-  LibCanFD_Msg msg;
-  memset(&msg, 0, sizeof(msg));
-
-  msg.ID = id;
-  msg.FrameType = 0x04;
-  msg.DLC = 15;
-  msg.ExternFlag = externflag;
-  msg.RemoteFlag = 0;
-
-  const size_t copy_size = std::min(data.size(), size_t(64));
-  memcpy(msg.Data, data.data(), copy_size);
-
-  const int ret = fn_CANFD_Transmit_(dev_index_, 0, &msg, 1, 100);
-  const bool success = (ret == 1);
-  if (!success) {
-    std::cerr << "CANFD_Transmit failed, ret: " << ret << std::endl;
-    ++lost_frames_;
-  }
-  return success;
-}
-#endif  // USE_LIBCANBUS
 
 void CANFDMaster::setReceiveCallback(ReceiveCallback callback) {
   receive_callback_ = callback;
 }
 
 void CANFDMaster::receiveThreadFunc() {
-#ifdef USE_LIBCANBUS
-  libcanbusReceiveLoop();
-#else
   while (receive_thread_running_) {
     if (!is_connected_ || socket_fd_ < 0) {
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
       continue;
     }
 
-    struct canfd_frame frame;
     struct timeval timeout;
     timeout.tv_sec = 0;
     timeout.tv_usec = 50000;
@@ -912,78 +476,61 @@ void CANFDMaster::receiveThreadFunc() {
 
     const int ret =
         select(socket_fd_ + 1, &readfds, nullptr, nullptr, &timeout);
-    if (ret > 0 && FD_ISSET(socket_fd_, &readfds)) {
-      const ssize_t nbytes = read(socket_fd_, &frame, sizeof(frame));
-      if (nbytes == static_cast<ssize_t>(sizeof(frame))) {
-        if (receive_callback_) {
-          uint32_t id = frame.can_id & CAN_EFF_MASK;
-          if (!(frame.can_id & CAN_EFF_FLAG)) {
-            id = frame.can_id & CAN_SFF_MASK;
-          }
-
-          const int data_length = frame.len;
-          std::vector<uint8_t> rxdata(data_length);
-          memcpy(rxdata.data(), frame.data, data_length);
-
-          const uint64_t timestamp =
-              std::chrono::duration_cast<std::chrono::microseconds>(
-                  std::chrono::system_clock::now().time_since_epoch())
-                  .count();
-
-          receive_callback_(id, rxdata, timestamp);
-        }
-      } else {
+    if (ret < 0) {
+      if (errno != EINTR) {
         ++lost_frames_;
       }
-    } else if (ret < 0) {
-      ++lost_frames_;
+      continue;
     }
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(5));
-  }
-#endif
-}
-
-#ifdef USE_LIBCANBUS
-void CANFDMaster::libcanbusReceiveLoop() {
-  static constexpr int kDlcToLength[] = {0, 1, 2, 3, 4, 5, 6, 7,
-                                         8, 12, 16, 20, 24, 32, 48, 64};
-  static constexpr int kRecvBufSize = 500;
-  static constexpr int kRecvTimeoutMs = 50;
-
-  LibCanFD_Msg msgs[kRecvBufSize];
-
-  while (receive_thread_running_) {
-    if (!is_connected_) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    if (ret == 0) {
       continue;
     }
 
-    const int count =
-        fn_CANFD_Receive_(dev_index_, 0, msgs, kRecvBufSize, kRecvTimeoutMs);
-
-    if (count > 0 && receive_callback_) {
-      for (int i = 0; i < count; ++i) {
-        const LibCanFD_Msg& msg = msgs[i];
-        const int data_length = msg.DLC < 16 ? kDlcToLength[msg.DLC] : 64;
-
-        std::vector<uint8_t> rxdata(data_length);
-        memcpy(rxdata.data(), msg.Data, data_length);
-
-        if (msg.ErrSatus != 0) {
+    // select 只负责等待第一帧；随后非阻塞地把内核接收队列排空。
+    // 灵巧手反馈约 2kHz，逐帧 sleep(5ms) 会让接收线程永远追不上。
+    for (int drained = 0; drained < 4096 && receive_thread_running_;
+         ++drained) {
+      struct canfd_frame frame;
+      const ssize_t nbytes = read(socket_fd_, &frame, sizeof(frame));
+      if (nbytes < 0) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+          break;
+        }
+        if (errno != EINTR) {
           ++lost_frames_;
         }
-
-        receive_callback_(msg.ID, rxdata, msg.TimeStamp);
+        break;
       }
-    } else if (count < 0) {
-      ++lost_frames_;
-    }
+      if (nbytes == 0) {
+        break;
+      }
+      if (nbytes != static_cast<ssize_t>(sizeof(frame))) {
+        ++lost_frames_;
+        continue;
+      }
+      if (!receive_callback_) {
+        continue;
+      }
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      uint32_t id = frame.can_id & CAN_EFF_MASK;
+      if (!(frame.can_id & CAN_EFF_FLAG)) {
+        id = frame.can_id & CAN_SFF_MASK;
+      }
+
+      const int data_length = frame.len;
+      std::vector<uint8_t> rxdata(data_length);
+      memcpy(rxdata.data(), frame.data, data_length);
+
+      const uint64_t timestamp =
+          std::chrono::duration_cast<std::chrono::microseconds>(
+              std::chrono::system_clock::now().time_since_epoch())
+              .count();
+
+      receive_callback_(id, rxdata, timestamp);
+    }
   }
 }
-#endif  // USE_LIBCANBUS
+
 
 bool CANFDMaster::isConnected() const { return is_connected_; }
 
@@ -993,4 +540,4 @@ uint64_t CANFDMaster::getLostFrames() const { return lost_frames_; }
 
 void CANFDMaster::resetLostFrames() { lost_frames_ = 0; }
 
-#endif  // USE_HCANBUS / USE_GSUSB_CANFD / USE_SOCKETCAN / USE_LIBCANBUS
+#endif  // USE_GSUSB_CANFD / USE_SOCKETCAN
