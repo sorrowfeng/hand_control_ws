@@ -26,11 +26,14 @@ reintroducing old project/package names. Exceptions that intentionally remain:
 
 ROS 2 Humble workspace packages:
 
-- `hand_control_interfaces`: service/message interfaces.
+- `hand_control_interfaces`: service/message interfaces (49 `.srv` plus the
+  `HandJointState`, `TactileState`, and `TactileSite` messages).
 - `hand_control_service`: hardware communication and service node.
 - `hand_control_description`: model loading, robot state publishing, RViz.
 - `sequence_demo_cpp`: C++ motion demo.
 - `sequence_demo_py`: Python motion demo.
+- `tactile_demo_cpp`: C++ tactile sensor self-check demo (`tactile_checker`).
+- `tactile_demo_py`: Python tactile sensor self-check demo (`tactile_checker`).
 
 Important launch/config files:
 
@@ -145,14 +148,32 @@ configuration instead of editing every URDF path. The copied model folder names
 may remain vendor/model-specific; that is an explicit exception to the
 white-label naming rule.
 
-Current known model assets include:
+Current model assets under `src/hand_control_description/models/` (eight
+folders, two product lines, left and right hands):
 
-- `DH116S-R000-A1`
-- `DH116S-L000-A1`
-- `DH116-L000-A1`
-- `DH116-R000-A1`
+- `DH116-R000-A1`, `DH116-L000-A1`
+- `DH116S-R000-A1`, `DH116S-L000-A1`
+- `Lumi-Dex-11-R000-A1`, `Lumi-Dex-11-L000-A1`
+- `Lumi-Dex-11S-R000-A1`, `Lumi-Dex-11S-L000-A1`
 
-The real hardware currently used in testing was `DH116S-L000-A1`.
+Each folder carries its own `urdf/`, `mjcf/`, `meshes/`, `config/`, and
+`package.xml`, so models are self-contained. `config/model.yaml` currently
+selects `DH116S-L000-A1`, which is also the model used for real-hardware
+testing. Vendors receive a subset of these folders chosen per vendor in
+`packaging/vendors.json`.
+
+## Documentation
+
+- `README.md` is the complete user-facing document. `docs/` holds two condensed
+  versions (Chinese and English) of the same content. When public behavior
+  changes, update all three together; they have drifted apart in the past.
+- `docs/项目维护笔记.md` carries maintainer knowledge that does not belong in
+  the user docs: SDK interface coverage gaps, local build pitfalls, packaging
+  and release conventions.
+- `docs/` ships inside vendor packages, so it must not name specific vendors or
+  SDK libraries — packaging runs a per-vendor forbidden-string scan over it.
+  `AGENTS.md`, `packaging/`, and `scripts/package_vendor.py` are excluded from
+  packages, so internal detail is fine here.
 
 ## Deployment Checklist
 
@@ -189,6 +210,17 @@ If RViz/model joints jump between two positions, first check for duplicate
 
 - `main` is the only intended active branch.
 - Push to `origin/main`.
+- Commit messages are written in Chinese: a `type: 主题` subject line
+  (`feat`, `docs`, `chore`) followed by one `-m` paragraph per category
+  (功能 / 文档 / 工程).
+- Pushing to GitHub has been unreliable in both directions: the machine
+  configures a local HTTP proxy (`127.0.0.1:7890`), and depending on the day
+  either the proxied route fails with a TLS error or the direct route resets.
+  Try the other route and a larger `http.postBuffer` before blaming
+  credentials, e.g.
+  `git -c http.proxy= -c https.proxy= -c http.postBuffer=524288000 push origin main`.
+- Fetch before pushing: the remote may have advanced from another machine even
+  when the local branch looked ahead.
 - Avoid modifying `thirdparty` SDK sources unless the task explicitly asks for
   SDK integration work.
 - Be careful with generated build artifacts; do not commit `build/`, `install/`,
