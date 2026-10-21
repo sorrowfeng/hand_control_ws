@@ -36,6 +36,9 @@ class SerialPort {
 
   bool isOpen() const { return is_open_.load(); }
 
+  // 物理口仍打开，但超过阈值没有收到任何原始字节时返回 false。
+  bool isHealthy() const;
+
   // Synchronously write data to the serial port.
   bool write(const uint8_t* data, size_t size);
 
@@ -60,6 +63,8 @@ class SerialPort {
   std::atomic<bool> is_open_{false};
   std::thread read_thread_;
   std::atomic<bool> running_{false};
+  std::atomic<int64_t> opened_at_ms_{0};
+  std::atomic<int64_t> last_rx_ms_{0};
   ReadCallback read_callback_;
 
   std::mutex write_mutex_;

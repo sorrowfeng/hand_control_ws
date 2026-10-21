@@ -1262,6 +1262,9 @@ void EthercatMaster::run() {
 
       {
         std::lock_guard<std::mutex> soem_lock(soem_mutex_);
+        // getSlaveInputs() 用 io_mutex_ 保护 PDO 快照；这里必须持有同一把锁，
+        // 否则监控线程可能在 ecx_receive_processdata() 写 inputs_ 时读到撕裂数据。
+        std::lock_guard<std::mutex> io_lock(io_mutex_);
 
         if (!started_.load() || connection_lost_.load() || outputs_ == nullptr ||
             inputs_ == nullptr || output_bytes_ <= 0 || input_bytes_ <= 0) {

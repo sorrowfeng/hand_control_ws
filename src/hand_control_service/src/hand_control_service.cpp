@@ -771,7 +771,9 @@ class Rs485Bus : public BusBase {
   ~Rs485Bus() override { stop(); }
 
   bool start(rclcpp::Logger logger) override {
-    if (port_ && port_->isOpen() && shared_bus_) return true;
+    if (port_ && port_->isOpen() && port_->isHealthy() && shared_bus_) {
+      return true;
+    }
 
     // 上一次连接可能只建立了一半，先清理再重试。
     stop();
@@ -837,7 +839,7 @@ class Rs485Bus : public BusBase {
   }
 
   bool isAlive() const override {
-    return port_ && port_->isOpen() && shared_bus_;
+    return port_ && port_->isOpen() && port_->isHealthy() && shared_bus_;
   }
 
   bool attachHand(const std::shared_ptr<HandDevice>& hand,

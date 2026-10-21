@@ -4,6 +4,16 @@
 #include <cctype>
 #include <chrono>
 
+namespace {
+constexpr int64_t kSerialNoDataTimeoutMs = 3000;
+
+int64_t nowMs() {
+  return std::chrono::duration_cast<std::chrono::milliseconds>(
+             std::chrono::steady_clock::now().time_since_epoch())
+      .count();
+}
+}  // namespace
+
 #ifdef _WIN32
 // Windows headers already included via SerialPort.h
 #else
@@ -57,6 +67,9 @@ bool SerialPort::open(const std::string& port_name, uint32_t baud_rate) {
   timeouts.ReadTotalTimeoutMultiplier = 0;
   SetCommTimeouts(hCom_, &timeouts);
 
+  const int64_t now = nowMs();
+  opened_at_ms_.store(now, std::memory_order_relaxed);
+  last_rx_ms_.store(now, std::memory_order_relaxed);
   is_open_.store(true);
   running_ = true;
   read_thread_ = std::thread(&SerialPort::readLoop, this);
@@ -70,6 +83,8 @@ void SerialPort::close() {
   CloseHandle(hCom_);
   hCom_ = INVALID_HANDLE_VALUE;
   is_open_.store(false);
+  opened_at_ms_.store(0, std::memory_order_relaxed);
+  last_rx_ms_.store(0, std::memory_order_relaxed);
 }
 
 bool SerialPort::platformWrite(const uint8_t* data, size_t size) {
@@ -181,6 +196,9 @@ bool SerialPort::open(const std::string& port_name, uint32_t baud_rate) {
     return false;
   }
 
+  const int64_t now = nowMs();
+  opened_at_ms_.store(now, std::memory_order_relaxed);
+  last_rx_ms_.store(now, std::memory_order_relaxed);
   is_open_.store(true);
   running_ = true;
   read_thread_ = std::thread(&SerialPort::readLoop, this);
@@ -375,6 +393,9 @@ bool SerialPort::open(const std::string& port_name, uint32_t baud_rate) {
     return false;
   }
 
+  const int64_t now = nowMs();
+  opened_at_ms_.store(now, std::memory_order_relaxed);
+  last_rx_ms_.store(now, std::memory_order_relaxed);
   is_open_.store(true);
   running_ = true;
   read_thread_ = std::thread(&SerialPort::readLoop, this);
@@ -412,6 +433,8 @@ void SerialPort::close() {
   ::close(fd_);
   fd_ = -1;
   is_open_.store(false);
+  opened_at_ms_.store(0, std::memory_order_relaxed);
+  last_rx_ms_.store(0, std::memory_order_relaxed);
 }
 
 bool SerialPort::platformWrite(const uint8_t* data, size_t size) {
@@ -443,6 +466,15 @@ bool SerialPort::write(const uint8_t* data, size_t size) {
   return platformWrite(data, size);
 }
 
+bool SerialPort::isHealthy() const {
+  if (!is_open_.load(std::memory_order_relaxed)) return false;
+  const int64_t last = last_rx_ms_.load(std::memory_order_relaxed);
+  const int64_t since =
+      last > 0 ? last : opened_at_ms_.load(std::memory_order_relaxed);
+  if (since <= 0) return true;
+  return nowMs() - since <= kSerialNoDataTimeoutMs;
+}
+
 void SerialPort::readLoop() {
   uint8_t chunk[1024];
 
@@ -458,6 +490,7 @@ void SerialPort::readLoop() {
       continue;
     }
 
+    last_rx_ms_.store(nowMs(), std::memory_order_relaxed);
     if (read_callback_)
       read_callback_(chunk, static_cast<size_t>(n));
   }

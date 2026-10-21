@@ -16,6 +16,16 @@ namespace {
 // 适配器/USB 句柄需要一点时间才能重新打开，立即重连常失败。保持与 Python
 // 版 controller_canfd.attempt_reconnect(delay_s) 一致。
 constexpr int kCanfdReconnectDelayMs = 200;
+
+// 超过这个时间没有收到任何 CANFD 帧就认为链路已断。手部反馈约 2kHz，
+// 3 秒无帧已经足够说明适配器/总线异常，同时给初始化留出余量。
+constexpr int64_t kCanfdNoFrameTimeoutMs = 3000;
+
+int64_t nowMs() {
+  return std::chrono::duration_cast<std::chrono::milliseconds>(
+             std::chrono::steady_clock::now().time_since_epoch())
+      .count();
+}
 }  // namespace
 
 
@@ -96,6 +106,9 @@ bool CANFDMaster::connect(int deviceIndex, int nomBaud, int dataBaud) {
   dev_index_ = deviceIndex;
   nom_baud_ = nomBaud;
   data_baud_ = dataBaud;
+  const int64_t now = nowMs();
+  connected_at_ms_.store(now, std::memory_order_relaxed);
+  last_rx_ms_.store(now, std::memory_order_relaxed);
   is_connected_ = true;
 
   receive_thread_running_ = true;
@@ -118,6 +131,8 @@ bool CANFDMaster::disconnect() {
   gsusb_bus_.reset();
   dev_index_ = -1;
   is_connected_ = false;
+  connected_at_ms_.store(0, std::memory_order_relaxed);
+  last_rx_ms_.store(0, std::memory_order_relaxed);
   resetLostFrames();
   return true;
 }
@@ -199,6 +214,7 @@ void CANFDMaster::receiveThreadFunc() {
       if (!received) {
         break;
       }
+      last_rx_ms_.store(nowMs(), std::memory_order_relaxed);
 
       // drop_echo 已在 configure() 中开启,回环帧由库的接收路径丢弃,
       // 这里不会收到 echo 帧。
@@ -223,7 +239,14 @@ void CANFDMaster::receiveThreadFunc() {
   }
 }
 
-bool CANFDMaster::isConnected() const { return is_connected_; }
+bool CANFDMaster::isConnected() const {
+  if (!is_connected_.load(std::memory_order_relaxed)) return false;
+  const int64_t last = last_rx_ms_.load(std::memory_order_relaxed);
+  const int64_t since =
+      last > 0 ? last : connected_at_ms_.load(std::memory_order_relaxed);
+  if (since <= 0) return true;
+  return nowMs() - since <= kCanfdNoFrameTimeoutMs;
+}
 
 int CANFDMaster::getCurrentDeviceIndex() const { return dev_index_; }
 
@@ -377,6 +400,9 @@ bool CANFDMaster::connect(int deviceIndex, int nomBaud, int dataBaud) {
     return false;
   }
 
+  const int64_t now = nowMs();
+  connected_at_ms_.store(now, std::memory_order_relaxed);
+  last_rx_ms_.store(now, std::memory_order_relaxed);
   is_connected_ = true;
   receive_thread_running_ = true;
   receive_thread_ = std::thread(&CANFDMaster::receiveThreadFunc, this);
@@ -404,6 +430,8 @@ bool CANFDMaster::disconnect() {
 
   dev_index_ = -1;
   is_connected_ = false;
+  connected_at_ms_.store(0, std::memory_order_relaxed);
+  last_rx_ms_.store(0, std::memory_order_relaxed);
   resetLostFrames();
   return true;
 }
@@ -508,6 +536,7 @@ void CANFDMaster::receiveThreadFunc() {
         ++lost_frames_;
         continue;
       }
+      last_rx_ms_.store(nowMs(), std::memory_order_relaxed);
       if (!receive_callback_) {
         continue;
       }
@@ -532,7 +561,14 @@ void CANFDMaster::receiveThreadFunc() {
 }
 
 
-bool CANFDMaster::isConnected() const { return is_connected_; }
+bool CANFDMaster::isConnected() const {
+  if (!is_connected_.load(std::memory_order_relaxed)) return false;
+  const int64_t last = last_rx_ms_.load(std::memory_order_relaxed);
+  const int64_t since =
+      last > 0 ? last : connected_at_ms_.load(std::memory_order_relaxed);
+  if (since <= 0) return true;
+  return nowMs() - since <= kCanfdNoFrameTimeoutMs;
+}
 
 int CANFDMaster::getCurrentDeviceIndex() const { return dev_index_; }
 

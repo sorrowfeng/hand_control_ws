@@ -125,6 +125,8 @@ CANFD:
   mutually exclusive with the gsusb default.
 - Runtime macros selected by CMake: `HAND_CONTROL_CANFD_USE_GSUSB` or
   `HAND_CONTROL_CANFD_USE_SOCKETCAN`.
+- Link health: no received frame for 3 seconds marks the bus unhealthy; the
+  5-second reconnect timer restarts it and re-initializes attached hands.
 
 RS485:
 
@@ -134,6 +136,8 @@ RS485:
   `RS485SharedBus` for framing, CRC, scheduling, and node dispatch.
 - Configure the shared-bus transaction interval from the baudrate (30 ms for
   500000 and above, larger for slower rates).
+- `SerialPort::isHealthy()` uses the same 3-second no-byte timeout, so a
+  disconnected serial adapter also triggers the reconnect path.
 
 EtherCAT:
 

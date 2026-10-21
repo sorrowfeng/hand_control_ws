@@ -106,6 +106,9 @@ class CANFDMaster {
   std::thread receive_thread_;
   ReceiveCallback receive_callback_;
   uint64_t lost_frames_{0};
+  // 总线健康判断：超过阈值没有收到任何帧就认为链路已断，交给上层重连。
+  std::atomic<int64_t> connected_at_ms_{0};
+  std::atomic<int64_t> last_rx_ms_{0};
 
 #if defined(USE_GSUSB_CANFD)
   // gsusb-canfd(userspace libusb gs_usb 驱动)总线句柄。
